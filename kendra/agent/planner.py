@@ -495,11 +495,22 @@ remembered, researched, or did something unless the context supports it.
         description (16-40s) to read a name that YuNet+SFace produce in
         ~0.3s. Returns (reply, launch_meet) or None to fall back to the
         full sight path (e.g. no face found — maybe turned away)."""
-        try:
+        async def one_pass():
             result = await asyncio.wait_for(self.vision.recognize_faces_now(), timeout=8.0)
+            return [m for m in (result or {}).get("matches", []) if isinstance(m, dict)]
+
+        try:
+            matches = await one_pass()
+            if matches and not any(m.get("status") == "recognized" for m in matches):
+                # One off-angle frame must not turn a known person into a
+                # "stranger" (and trigger a re-introduction). Second look at
+                # the next renderer frame before declaring unknown.
+                await asyncio.sleep(2.0)
+                retry = await one_pass()
+                if any(m.get("status") == "recognized" for m in retry):
+                    matches = retry
         except Exception:
             return None
-        matches = [m for m in (result or {}).get("matches", []) if isinstance(m, dict)]
         if not matches:
             return None
         names = [
