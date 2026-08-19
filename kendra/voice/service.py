@@ -226,11 +226,16 @@ class VoiceService:
 
         spoken_phrases: list[str] = []
         was_interrupted = False
+        turn_started = time.time()
         while True:
             item = await queue.get()
             if item is None:
                 break
             phrase, affect = item
+            if not spoken_phrases:
+                # ELC perceived-latency budget: first-audio-out is THE felt
+                # metric; target <1.5s once the voice LoRA lands.
+                LOG.info("First audio out in %.1fs", time.time() - turn_started)
             if not _speakable_phrase(phrase, first=not spoken_phrases):
                 LOG.info("Skipped an echoed phrase before it was spoken")
                 continue
@@ -254,8 +259,26 @@ class VoiceService:
         if was_interrupted:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await producer
+            # Barge-in truth (ELC interrupted-flag): the cancelled generation
+            # was never stored, so record what Jonathan ACTUALLY heard —
+            # otherwise the exchange vanishes from her history entirely.
+            heard_text = " ".join(spoken_phrases).strip()
+            if heard_text:
+                async def store_truncated() -> None:
+                    try:
+                        brain = UnixJsonClient(self.settings.runtime_dir / "brain.sock", timeout=10)
+                        await brain.call("turn", {
+                            "session_id": "voice-interrupted",
+                            "user_text": user_text,
+                            "kendra_text": heard_text + " —(Jonathan interrupted; the rest went unspoken)",
+                            "metadata": {"source": "voice", "interrupted": True},
+                        })
+                    except Exception:
+                        LOG.debug("Could not store interrupted turn", exc_info=True)
+                task = asyncio.create_task(store_truncated(), name="kendra-interrupted-turn")
+                task.add_done_callback(lambda _t: None)
             return {
-                "text": " ".join(spoken_phrases).strip(),
+                "text": heard_text,
                 "affect": "alert",
                 "interrupted": True,
             }

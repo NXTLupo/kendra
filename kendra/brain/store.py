@@ -372,6 +372,49 @@ class BrainStore:
                 (session_id, now_iso(), context),
             )
 
+    def set_fact(self, subject: str, key: str, value: str) -> None:
+        """ELC slot-store: stable typed facts by exact lookup, not embeddings."""
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO facts(subject, key, value, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(subject, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                (subject.strip().casefold(), key.strip().casefold(), value.strip(), now_iso()),
+            )
+
+    def fact_lookup(self, query: str, limit: int = 4) -> list[dict[str, Any]]:
+        """Exact-match tier consulted BEFORE semantic search: word-indexed
+        subject/key match, millisecond-fast, deterministic."""
+        words = [w for w in re.findall(r"[a-z0-9]+", query.casefold()) if len(w) > 2]
+        if not words:
+            return []
+        clauses = " OR ".join(["subject LIKE ? OR key LIKE ?"] * len(words))
+        params: list[str] = []
+        for w in words:
+            params.extend([f"%{w}%", f"%{w}%"])
+        rows = self.conn.execute(
+            f"SELECT subject, key, value FROM facts WHERE {clauses} "
+            f"ORDER BY updated_at DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        return [
+            {"content": f"{r['subject']} — {r['key']}: {r['value']}", "kind": "fact",
+             "provenance": "slot-store"}
+            for r in rows
+        ]
+
+    def amend_last_turn(self, kendra_text: str) -> bool:
+        """Barge-in truth (ELC interrupted-flag): replace the last stored
+        reply with what was ACTUALLY heard before the interruption, so the
+        model never believes Jonathan heard the unspoken tail."""
+        row = self.conn.execute("SELECT id FROM turns ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            return False
+        with self.conn:
+            self.conn.execute(
+                "UPDATE turns SET kendra_text=? WHERE id=?", (kendra_text, int(row["id"]))
+            )
+        return True
+
     def add_turn(
         self,
         session_id: str,
@@ -570,8 +613,10 @@ class BrainStore:
     ) -> dict[str, Any]:
         excluded = {str(kind) for kind in (exclude_kinds or [])}
         hits = self.search(query, limit=limit)
-        memories: list[dict[str, Any]] = []
-        used = 0
+        # Slot-store tier first (ELC): exact-match typed facts are the
+        # cheapest, most reliable recall — they ride ahead of semantic hits.
+        memories: list[dict[str, Any]] = self.fact_lookup(query, limit=2)
+        used = sum(len(m["content"]) for m in memories)
         for hit in hits:
             # Raw dialogue episodes fed back into a live prompt cause verbatim
             # parroting: a small model copies its own remembered reply instead

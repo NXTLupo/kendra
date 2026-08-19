@@ -138,6 +138,11 @@ class BrainService:
                 str(params["kendra_text"]),
                 params.get("session_id"),
             )
+        if method == "set_fact":
+            self.store.set_fact(str(params["subject"]), str(params["key"]), str(params["value"]))
+            return {"ok": True}
+        if method == "amend_last_turn":
+            return {"ok": self.store.amend_last_turn(str(params["kendra_text"]))}
         if method == "meet_person":
             # The meet ritual's storage step: the person lands in her second
             # brain (raw + a dedicated wiki page) and her associative memory,
@@ -158,6 +163,7 @@ class BrainService:
                 ],
                 links=["people"],
             )
+            self.store.set_fact(name, "relationship", "met in person; recognized by face")
             self.store.remember(
                 kind="relationship",
                 content=f"Kendra met {name} in person and will recognize them by sight.",
