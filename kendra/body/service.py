@@ -298,7 +298,11 @@ class BodyService:
             return await self._run_motion(self.driver.pose, name)
         if method == "look":
             if not self.capabilities.get("has_head_gimbal"):
-                raise RuntimeError("look is not available: has_head_gimbal=false")
+                # The RaspClaws head gimbal is not gate-verified yet. That is
+                # a fact about her body, not a failure — the UI buttons were
+                # painting red errors over a truthful "not yet".
+                return {"ok": False, "unsupported": True,
+                        "reason": "My head can't move yet — that part of my body isn't approved."}
             state = self._reflex()
             if state.stop_required:
                 raise RuntimeError("Reflex blocks gimbal motion")

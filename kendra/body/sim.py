@@ -23,6 +23,8 @@ class SimulationBodyDriver(BodyDriver):
         self.x = 0.0
         self.y = 0.0
         self.heading_deg = 0.0
+        self.head_pan = 0.0
+        self.head_tilt = 0.0
         self.profile = DEFAULT_PROFILE
 
     def _record(self, action: str, **kwargs: Any) -> dict[str, Any]:
@@ -65,6 +67,14 @@ class SimulationBodyDriver(BodyDriver):
 
     def pose(self, name: str) -> dict[str, Any]:
         return self._record("pose", name=name)
+
+    def look(self, pan: float, tilt: float) -> dict[str, Any]:
+        # Her real body has a two-servo head (channels 12/13); the simulated
+        # body tracks the same pan/tilt so the UI buttons and future gaze
+        # behaviors exercise identical code.
+        self.head_pan = float(pan)
+        self.head_tilt = float(tilt)
+        return self._record("look", pan=self.head_pan, tilt=self.head_tilt)
 
     def stop(self) -> dict[str, Any]:
         self.state = "stopped"

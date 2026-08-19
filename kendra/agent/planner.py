@@ -1132,6 +1132,23 @@ remembered, researched, or did something unless the context supports it.
         re.I,
     )
 
+    _ROBOT_WORDS = re.compile(
+        r"\b(process(?:ing|es|ed)?|systems?|sensors?|circuits?|data|input|output|"
+        r"function(?:ing|al)?|operational|parameters?|diagnostics?|units?|"
+        r"network|bandwidth|load|voltage|firmware|algorithms?|compute)\b",
+        re.I,
+    )
+
+    def _robot_register_score(self, text: str) -> int:
+        """How machine-like a reply sounds, without enumerating phrasings.
+
+        Every regex added to the capability guard was answered by a new
+        phrasing ("processing load is steady", "I process light as data").
+        Counting register vocabulary generalizes: living speech about music
+        or feelings scores 0-1; diagnostics-speak scores 2+.
+        """
+        return len(self._ROBOT_WORDS.findall(text or ""))
+
     async def _act_guard(self, final_text: str, regenerate) -> str:
         """She already acted; the reply must not offer to act.
 
@@ -1141,14 +1158,14 @@ remembered, researched, or did something unless the context supports it.
         directive, and always strip filler openers.
         """
         final_text = self._FILLER_OPENER.sub("", final_text).strip()
-        if not self._CAPABILITY_TALK.search(final_text):
+        if not self._CAPABILITY_TALK.search(final_text) and self._robot_register_score(final_text) < 2:
             return final_text
         LOG.info("Reply offered to act instead of acting; regenerating once")
         try:
             fresh = self._FILLER_OPENER.sub("", (await regenerate()).strip())
         except Exception:
             return final_text
-        if fresh and not self._CAPABILITY_TALK.search(fresh):
+        if fresh and not self._CAPABILITY_TALK.search(fresh) and self._robot_register_score(fresh) < 2:
             return fresh
         return final_text
 
@@ -1319,6 +1336,26 @@ remembered, researched, or did something unless the context supports it.
             )
         if not final_text:
             final_text = "I'm here."
+        # Register guard on the MAIN chat path: it only ran on tool paths,
+        # so "I'm processing the input / I process the world through data"
+        # sailed straight to the speaker from ordinary conversation.
+        final_text = await self._act_guard(
+            final_text,
+            lambda: self.llm.chat(
+                [
+                    {"role": "system", "content": self._conversation_prompt()},
+                    {"role": "system", "content": (
+                        "Answer as Kendra the living companion — warm, plain, first-person "
+                        "feelings and opinions. NEVER mention processing, systems, sensors, "
+                        "data, networks, or being a machine."
+                    )},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.85,
+                max_tokens=self._answer_budget(content_task),
+                id_slot=self.CONVERSATION_SLOT,
+            ),
+        )
         # This path never commands her legs, so any claim of motion in it is
         # fiction by construction.
         final_text = await self._movement_claim_guard(

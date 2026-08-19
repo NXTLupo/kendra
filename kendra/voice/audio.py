@@ -144,10 +144,25 @@ class LocalAudioCapture:
                         # 2000-9000, machine-room ambient under fan load can
                         # reach ~1000. A threshold above ~900 starts eating
                         # quiet speech, which is worse than a rare false start.
-                        threshold = float(np.clip(mean * 3.0, 120.0, 900.0))
+                        # One noisy window (a passing truck, her own speaker
+                        # tail, a guitar chord) used to pin this at the 900
+                        # ceiling and leave her deaf to ordinary speech for
+                        # the rest of the session. Use the quietest of the
+                        # samples and cap far lower.
+                        # Three short listens, keep the QUIETEST: one noisy
+                        # window must not deafen her for the whole session.
+                        floors = [mean]
+                        for _ in range(2):
+                            try:
+                                floors.append(self._probe(sd, index)[0])
+                            except Exception:
+                                break
+                        floor = min(floors)
+                        threshold = float(np.clip(floor * 3.0, 120.0, 550.0))
                         LOG.info(
-                            "VAD threshold calibrated to %.0f (configured %.0f, ambient %.0f)",
-                            threshold, self.vad.threshold_rms, mean,
+                            "VAD threshold calibrated to %.0f (configured %.0f, quietest ambient %.0f of %s)",
+                            threshold, self.vad.threshold_rms, floor,
+                            [round(f) for f in floors],
                         )
                         self.vad.threshold_rms = threshold
             self._device_ready = True
