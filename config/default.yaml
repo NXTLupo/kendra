@@ -247,14 +247,16 @@ voice:
     # RTF 0.255 — real-time on the iMac, borderline on Pi. CPU ONLY: the
     # same study measured iGPU offload degrading Kokoro to RTF 1.33.
     # Fetch with scripts/fetch_local_models.py --kokoro.
-    provider: piper
+    # Jonathan chose Kokoro at pitch 1.20 as her voice (2026-08-19) after
+    # A/B listening. Piper remains the instant rollback: provider: piper.
+    provider: kokoro_onnx
     piper_python: python3
     model: ./models/piper/en_US-amy-medium/en_US-amy-medium.onnx
     kokoro_model: ./models/kokoro/kokoro-v1.0.onnx
     kokoro_voices: ./models/kokoro/voices-v1.0.bin
     kokoro_voice: af_heart
     # Pitch scale: >1.0 raises her pitch (pace auto-compensated). Zero-CPU.
-    kokoro_pitch: 1.12
+    kokoro_pitch: 1.20
     player: sounddevice
     chunk_chars: 180
     default_affect: warm

@@ -194,7 +194,7 @@ class KokoroTTS:
         # Cuteness knob: raises pitch (and pace equally) by playing the
         # synthesized audio at a scaled sample rate — the classic "small
         # creature" effect, zero extra CPU, so it is free on the Pi too.
-        # 1.0 = as synthesized; Jonathan's pick after listening: ~1.12.
+        # 1.0 = as synthesized; Jonathan's pick after listening: 1.20.
         self.pitch = float(settings.get("voice.tts.kokoro_pitch", 1.0))
         self.default_affect = str(settings.get("voice.tts.default_affect", "warm"))
         self._engine: Any | None = None
