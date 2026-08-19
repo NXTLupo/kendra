@@ -70,7 +70,12 @@ class AgentRuntime:
             "look": (" look left", " look right", " pan ", " tilt "),
             "observe": (
                 " what do you see", " use the camera", " webcam", " observe ", " take a photo",
-                " look at ", " can you see", " see me", " seeing me", " describe me",
+                # " look at " alone routed "should I take my telescope out and
+                # look at the stars" to a 13.6s Moondream describe. Sight is
+                # about HERE and NOW: require a present-scene object.
+                " look at this", " look at that", " look at me", " look at my",
+                " look at us", " look at the room", " look at it",
+                " can you see", " see me", " seeing me", " describe me",
                 " how do i look", " how i look", " my appearance", " physical appearance",
                 " your eyes", " watch me", " what am i wearing", " what color",
                 " in front of you", " around you", " look around", " describe the",
@@ -745,6 +750,31 @@ remembered, researched, or did something unless the context supports it.
             },
         ]
 
+    _RESEARCH_PROMISE = re.compile(
+        r"\b(?:I'?ll|I will|let me|I'?m going to)\s+(?:look\s+(?:that|it|this)?\s*up"
+        r"|search|check|find out|research)",
+        re.I,
+    )
+
+    async def _owes_research(self, user_text: str) -> bool:
+        """Did she promise to look something up and not deliver?
+
+        Measured failure: she said "I'll look that up for you", Jonathan
+        restated the question, and the restatement matched no research
+        keyword — so she promised again, forever. A standing promise makes
+        the next real question a research turn.
+        """
+        if len(user_text.split()) < 4 and "?" not in user_text:
+            return False  # "yes", "okay" — not a restatement
+        try:
+            recent = await self.brain.recent_turns(limit=2, max_age_seconds=600)
+        except Exception:
+            return False
+        return any(
+            self._RESEARCH_PROMISE.search(str(turn.get("kendra_text") or ""))
+            for turn in (recent or [])
+        )
+
     _WHO_QUESTION = re.compile(
         # Any identity-shaped sight question takes the 0.3s face-recognizer
         # path. "tell me who you see" once missed this (regex demanded
@@ -903,6 +933,7 @@ remembered, researched, or did something unless the context supports it.
         r"|\binternal microphones?\b|\bsystems? (?:are|is) (?:active|online|operational)\b"
         r"|\bsound waves\b|\baudio input\b"
         r"|\bI will (?:process|provide|retrieve|fetch|now (?:get|find))\b"
+        r"|\b(?:I'?ll|I will|let me)\s+(?:look|check|search|find)\b"
         # Internal metrics spoken aloud: "confidence of 1.0", "95% confidence"
         r"|\bconfidence (?:of |level |score )?\d|\b\d+(?:\.\d+)?\s?%?\s?confidence\b",
         re.I,
@@ -1153,6 +1184,11 @@ remembered, researched, or did something unless the context supports it.
         registry = ToolRegistry(self.settings, capabilities)
         tool_schemas = self._relevant_tool_schemas(user_text, registry.schemas())
         allowed_tools = {str(schema["name"]) for schema in tool_schemas}
+        if "research" not in allowed_tools and await self._owes_research(user_text):
+            # She promised to look something up last turn: pay the debt now
+            # instead of promising again.
+            tool_schemas = [s for s in registry.schemas() if str(s.get("name")) == "research"]
+            allowed_tools = {"research"}
         if "observe" in allowed_tools:
             if self._WHO_QUESTION.search(user_text):
                 fast = await self._fast_who_answer(user_text)
@@ -1630,6 +1666,11 @@ remembered, researched, or did something unless the context supports it.
         registry = ToolRegistry(self.settings, capabilities)
         tool_schemas = self._relevant_tool_schemas(user_text, registry.schemas())
         allowed_tools = {str(schema["name"]) for schema in tool_schemas}
+        if "research" not in allowed_tools and await self._owes_research(user_text):
+            # She promised to look something up last turn: pay the debt now
+            # instead of promising again.
+            tool_schemas = [s for s in registry.schemas() if str(s.get("name")) == "research"]
+            allowed_tools = {"research"}
         if "observe" in allowed_tools:
             # Acknowledge the task out loud BEFORE the slow work: Jonathan
             # asked her to do something, and silence until the answer reads
@@ -1805,8 +1846,14 @@ remembered, researched, or did something unless the context supports it.
             # is cut deterministically BEFORE the first phrase reaches Piper:
             # buffer the opening, strip the tic, then stream normally.
             capability_lead = re.compile(
+                # Promise-instead-of-deliver: she searched, then opened with
+                # "I'll look that up for you." Contractions and future tense
+                # were missing from the guard, so the promise reached the
+                # speaker and the findings never did.
                 r"^\s*(?:(?:I can (?:look|check|search)[^.!?]*|I see a (?:few|couple)[^.!?]*"
-                r"|Let me (?:look|check|search)[^.!?]*|Sure[^.!?]*)[.!?]\s*)+",
+                r"|(?:I'?ll|I will|Let me|I'?m going to|I am going to)\s+"
+                r"(?:look|check|search|find|see|tell you|get)[^.!?]*"
+                r"|Sure[^.!?]*)[.!?]\s*)+",
                 re.I,
             )
             lead_pending = True

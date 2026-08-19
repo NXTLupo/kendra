@@ -219,6 +219,7 @@ export default function Home() {
     };
     pushFrameRef.current = pushFrame;
     let timer: number | null = null;
+    let watchdog: number | null = null;
     navigator.mediaDevices
       .getUserMedia({ video: { width: 1280, height: 720 } })
       .then((stream) => {
@@ -231,15 +232,40 @@ export default function Home() {
         void video.play();
         timer = window.setInterval(() => void pushFrame(), 5000);
         window.setTimeout(() => void pushFrame(), 1500);
+        // Eye watchdog: re-acquire the camera if the track dies (bridge
+        // restart, device grab, display sleep). Her eyes once stayed dark
+        // for ten minutes after a model-server swap killed the bridge.
+        watchdog = window.setInterval(() => {
+          if (cancelled) return;
+          const track = eyeStreamRef.current?.getVideoTracks?.()[0];
+          if (track && track.readyState === "live" && video.readyState >= 2) return;
+          eyeStreamRef.current?.getTracks().forEach((old) => old.stop());
+          eyeStreamRef.current = null;
+          navigator.mediaDevices
+            .getUserMedia({ video: { width: 1280, height: 720 } })
+            .then((fresh) => {
+              if (cancelled) {
+                fresh.getTracks().forEach((tr) => tr.stop());
+                return;
+              }
+              eyeStreamRef.current = fresh;
+              video.srcObject = fresh;
+              void video.play();
+            })
+            .catch(() => undefined);
+        }, 20000);
       })
       .catch(() => setNotice("Kendra's eyes need camera permission — approve it to let her see"));
     return () => {
       cancelled = true;
       if (timer != null) window.clearInterval(timer);
+      if (watchdog != null) window.clearInterval(watchdog);
       eyeStreamRef.current?.getTracks().forEach((track) => track.stop());
       eyeStreamRef.current = null;
     };
-  }, [online, visionReady]);
+    // Depend on `online` ONLY: visionReady flapping (service restart) used
+    // to tear the camera down mid-session.
+  }, [online]);
 
   const observe = async () => {
     // A fresh frame right now, so the button never races the 5s eye-stream.

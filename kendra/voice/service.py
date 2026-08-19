@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import random
 import re
@@ -90,6 +91,27 @@ def _extract_name(text: str) -> str | None:
     return " ".join(w.title() for w in candidate.split())
 
 
+_RESEARCH_WORDS = re.compile(
+    r"\b(research|look\s+(?:it|that|this)?\s*up|search|google|find out|"
+    r"news|headlines?|weather|forecast|what'?s happening|current|latest)\b",
+    re.I,
+)
+
+
+def _turn_mode(text: str) -> str:
+    """Which tone family fits this turn — heard before she answers.
+
+    Cheap local regexes (the planner's own routing shapes), so the palette
+    switches with zero added latency and matches what she is actually
+    about to do.
+    """
+    if AgentRuntime._WHO_QUESTION.search(text) or AgentRuntime._SIGHT_INTENT.search(text):
+        return "sight"
+    if AgentRuntime._FORCE_RESEARCH.search(text) or _RESEARCH_WORDS.search(text):
+        return "research"
+    return "think"
+
+
 def _is_noise_caption(text: str) -> bool:
     """Whisper captions non-speech audio like a subtitle track: "(upbeat
     music)", "[Applause]". Those are sounds in the room, not something the
@@ -122,6 +144,63 @@ class VoiceService:
         self._manual_capture_active = asyncio.Event()
         self._wake_cancel = threading.Event()
 
+    PRERENDER = (
+        ("Let me take a look right now.", "curious"),
+        ("On it — give me a moment to actually search.", "warm"),
+        ("Loud and clear.", "warm"),
+        ("Yep, I hear you.", "warm"),
+        ("I hear you just fine. What's up?", "warm"),
+        ("Right here. Go ahead.", "warm"),
+        ("Okay.", "warm"),
+        ("Oh, hi! I don't think we've met yet — I'm Kendra. What's your name?", "delighted"),
+    )
+
+    async def prerender_phrases(self) -> int:
+        """Synthesize her fixed lines once at boot (ELC voiceText pattern).
+
+        Kokoro runs near real time on this CPU, so every canned
+        acknowledgment cost ~1.5 s of dead air before she made a sound.
+        Pre-rendered WAVs play in milliseconds; identical win on the Pi,
+        where synthesis is slower still.
+        """
+        directory = self.settings.runtime_dir / "phrases"
+        directory.mkdir(parents=True, exist_ok=True)
+        self._phrase_cache: dict[tuple[str, str], Path] = {}
+        made = 0
+        for text, affect in self.PRERENDER:
+            digest = hashlib.sha256(f"{text}|{affect}".encode()).hexdigest()[:16]
+            path = directory / f"{digest}.wav"
+            if not path.exists():
+                try:
+                    await self.tts.synthesize(text, path, affect=affect)
+                    made += 1
+                except Exception:
+                    LOG.debug("Could not pre-render %r", text[:40], exc_info=True)
+                    continue
+            self._phrase_cache[(text.strip(), affect)] = path
+        LOG.info("Pre-rendered %d phrases (%d cached)", made, len(self._phrase_cache))
+        return made
+
+    def _play_cached(self, text: str, affect: str) -> bool:
+        path = getattr(self, "_phrase_cache", {}).get((text.strip(), affect))
+        if path is None or not path.exists():
+            return False
+        try:
+            import wave
+
+            import numpy as np
+            import sounddevice as sd
+
+            with wave.open(str(path), "rb") as clip:
+                rate = clip.getframerate()
+                frames = np.frombuffer(clip.readframes(clip.getnframes()), dtype=np.int16)
+            sd.play(frames, rate)
+            sd.wait()
+            return True
+        except Exception:
+            LOG.debug("Cached phrase playback failed", exc_info=True)
+            return False
+
     async def _spoken_stop(self, reason: str) -> None:
         self.tts.stop()
         try:
@@ -150,7 +229,8 @@ class VoiceService:
         # where there is no physical motion to emergency-stop anyway. The
         # robot profile keeps it on.
         if not self.stop_enabled or not bool(self.settings.get("voice.barge_in_monitor", True)):
-            await self.tts.speak(text, affect=affect)
+            if not await asyncio.to_thread(self._play_cached, text, affect):
+                await self.tts.speak(text, affect=affect)
             # Playback is over: replace the length-based estimate with the
             # truth plus a short mic-tail guard. The estimate ran long and
             # ate her listening window, or ran short and let her own voice
@@ -325,6 +405,8 @@ class VoiceService:
                 user_text,
                 [str(self.settings.get("voice.wake.phrase", "kendra")).casefold()],
             )
+            # Distinct tones per kind of work: he hears what she is doing.
+            self.thinking_sounds.set_mode(_turn_mode(user_text))
             import difflib
 
             for spoken_at, spoken in getattr(self, "_spoken_ledger", []):
@@ -721,6 +803,8 @@ class VoiceService:
         warm_task.add_done_callback(lambda _t: None)
         ack_task = asyncio.create_task(self.acks.prepare())
         ack_task.add_done_callback(lambda _t: None)
+        phrase_task = asyncio.create_task(self.prerender_phrases())
+        phrase_task.add_done_callback(lambda _t: None)
         wake_task = asyncio.create_task(self.wake_loop())
         try:
             assert self.server.server is not None
