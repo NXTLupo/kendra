@@ -518,7 +518,7 @@ remembered, researched, or did something unless the context supports it.
             }
         ]
 
-    async def _movement_turn(self, user_text: str) -> tuple[str, dict] | None:
+    async def _movement_turn(self, user_text: str, on_delta=None) -> tuple[str, dict] | None:
         """Deterministic locomotion: parse, announce, move, report.
 
         The model is not in this loop. "Stop" reaches her legs without
@@ -539,6 +539,12 @@ remembered, researched, or did something unless the context supports it.
                 pass
             return ("Stopping.", intent.as_dict())
         said = announce(intent)
+        if on_delta is not None:
+            # Walk AND talk: the announcement goes to the speaker now, and
+            # her legs start underneath it. Waiting for the walk to finish
+            # before speaking made a three-foot stroll feel like a hang.
+            await on_delta(said + " ", "delighted" if "coming over" in said else "warm")
+            said = ""
         try:
             result = await asyncio.wait_for(
                 self.body_motion.call("navigate", {"intent": intent.as_dict()}), timeout=80.0
@@ -557,6 +563,8 @@ remembered, researched, or did something unless the context supports it.
         blocked = result.get("blocked") if isinstance(result, dict) else None
         moved = float(result.get("travelled_m") or 0.0) if isinstance(result, dict) else 0.0
         tail = arrival(intent, moved_m=moved or None, blocked=blocked)
+        if on_delta is not None:
+            await on_delta(tail, "warm")
         return (f"{said} {tail}".strip(), {**intent.as_dict(), "result": result})
 
     async def _fast_who_answer(self, user_text: str) -> tuple[str, bool] | None:
@@ -1713,10 +1721,9 @@ remembered, researched, or did something unless the context supports it.
         source: str,
     ) -> dict[str, Any]:
         await self.brain.begin_session(session_id, context=source)
-        movement = await self._movement_turn(user_text)
+        movement = await self._movement_turn(user_text, on_delta=on_delta)
         if movement is not None:
             spoken, meta = movement
-            await on_delta(spoken, "delighted" if "coming over" in spoken else "warm")
             result = await self._remember_plain_turn(
                 session_id, user_text, spoken, source=source, streamed=True,
             )

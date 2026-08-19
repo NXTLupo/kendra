@@ -165,7 +165,11 @@ class BodyService:
         metres = float(distance) if distance else profile.distance_for_cycles(4)
         total_cycles = profile.cycles_for_distance(metres)
         travelled = 0.0
+        epoch = getattr(self, "_navigation_epoch", 0)
         for segment in segment_plan(total_cycles, per_segment=self.max_steps):
+            if getattr(self, "_navigation_epoch", 0) != epoch:
+                return {"ok": False, "mode": mode, "travelled_m": round(travelled, 3),
+                        "blocked": "you told me to stop"}
             # Her legs need a breather every few seconds of continuous gait
             # (reflex rest policy). A long walk should PAUSE and continue,
             # not abort — "go forward four feet" is one intention, not six.
@@ -201,7 +205,21 @@ class BodyService:
 
     async def observation(self) -> dict[str, Any]:
         state = self._reflex()
+        pose = None
+        last_motion = None
+        driver_x = getattr(self.driver, "x", None)
+        if driver_x is not None:  # simulated bodies only
+            pose = {
+                "x_m": round(float(self.driver.x), 3),
+                "y_m": round(float(getattr(self.driver, "y", 0.0)), 3),
+                "heading_deg": round(float(getattr(self.driver, "heading_deg", 0.0)) % 360, 1),
+            }
+            last = getattr(self.driver, "last_action", None)
+            if isinstance(last, dict):
+                last_motion = {k: v for k, v in last.items() if k != "timestamp"}
         return Observation(
+            pose=pose,
+            last_motion=last_motion,
             front_cm=state.front_cm,
             cliff=state.cliff,
             battery=state.battery,
@@ -258,6 +276,9 @@ class BodyService:
         if method in {"stop", "emergency_stop"}:
             reason = params.get("reason")
             LOG.warning("Body stop requested: %s", reason or method)
+            # Cancel any walk already in flight: "stop" mid-stride must mean
+            # stop mid-stride, not "finish the plan then stop".
+            self._navigation_epoch = getattr(self, "_navigation_epoch", 0) + 1
             self.body_state = "stopped"
             result = await asyncio.to_thread(self.driver.stop)
             self._last_motion_ended = time.monotonic()

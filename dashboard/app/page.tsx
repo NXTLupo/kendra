@@ -43,6 +43,8 @@ type Snapshot = {
     battery?: { state?: string; voltage?: number };
     cliff?: Record<string, boolean>;
     notes?: string[];
+    pose?: { x_m: number; y_m: number; heading_deg: number };
+    last_motion?: { action?: string; direction?: string; steps?: number; degrees?: number; travelled_m?: number };
   };
   brain: {
     stats?: { active_memories?: number; counts?: Record<string, number>; bytes?: number };
@@ -359,6 +361,16 @@ export default function Home() {
       <section className="notice-bar" aria-live="polite">
         <span>{busy ? "Kendra is working locally" : notice}</span>
         <span className="profile-chip">{snapshot?.profile.webots ? "3D body · config/webots.yaml" : "desktop simulation"}</span>
+        {snapshot?.body?.pose ? (
+          <span className="profile-chip" title="Where her simulated body is standing right now">
+            {`🕷 ${snapshot.body.pose.x_m.toFixed(2)}m, ${snapshot.body.pose.y_m.toFixed(2)}m · facing ${Math.round(snapshot.body.pose.heading_deg)}°`}
+            {snapshot.body.last_motion?.action === "walk" && snapshot.body.last_motion?.travelled_m
+              ? ` · last walk ${snapshot.body.last_motion.travelled_m}m ${snapshot.body.last_motion.direction ?? ""}`
+              : snapshot.body.last_motion?.action === "turn"
+                ? ` · last turn ${snapshot.body.last_motion.degrees}°`
+                : ""}
+          </span>
+        ) : null}
       </section>
 
       {activeView === "presence" && (

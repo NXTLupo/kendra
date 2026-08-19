@@ -49,6 +49,10 @@ class Observation(BaseModel):
     reflex_lock: bool = False
     blocked_directions: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    # Simulated bodies report where they are; the hardware driver has no
+    # odometry and simply omits this. Display-only — nothing depends on it.
+    pose: dict[str, float] | None = None
+    last_motion: dict[str, object] | None = None
 
 
 class ReflexState(BaseModel):
