@@ -234,13 +234,18 @@ class VisionService:
             raise PermissionError("Explicit consent is required. Re-run enrollment with consent=true only after the person agrees.")
         vectors: list[np.ndarray] = []
         captures: list[str] = []
+        # Spacing matters: on the desktop the renderer pushes a frame every
+        # ~5s, so a rapid burst captures the SAME image eight times — one bad
+        # moment (face turned) fails the whole enrollment. Spread captures so
+        # several distinct frames (and angles, on the robot) contribute.
+        capture_gap = float(self.settings.get("vision.enroll_capture_gap_seconds", 1.2))
         for _ in range(max(3, min(frames, 20))):
             frame, path = await asyncio.to_thread(self.capture)
             captures.append(path.name)
             features = await asyncio.to_thread(self.face_embeddings, frame)
             if len(features) == 1:
                 vectors.append(features[0])
-            await asyncio.sleep(0.08)
+            await asyncio.sleep(capture_gap)
         if len(vectors) < 3:
             raise RuntimeError("Enrollment needs at least three captures containing exactly one clear face")
         person_uid = await self.identity.create(name.strip(), consent=True, relationship=relationship)
