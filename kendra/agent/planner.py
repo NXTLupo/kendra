@@ -152,7 +152,15 @@ class AgentRuntime:
                     timeout=float(self.settings.get("agent.vision_context_timeout_seconds", 2.0)),
                 )
                 observation["people_in_view"] = int(visual.get("people_in_view", 0))
-                observation["recognized_people"] = list(visual.get("recognized_people", []))
+                # Names and known/unknown only. The raw match dicts carry
+                # confidence scores and internal ids, and the model read them
+                # aloud ("I recognize you with a confidence of 1.0") instead
+                # of just saying hello like a living thing.
+                observation["recognized_people"] = [
+                    {"display_name": p.get("display_name"), "status": p.get("status")}
+                    for p in visual.get("recognized_people", []) or []
+                    if isinstance(p, dict)
+                ]
                 observation["perch"] = visual.get("perch")
             except Exception as exc:
                 observation.setdefault("notes", []).append(
@@ -840,7 +848,9 @@ remembered, researched, or did something unless the context supports it.
         r"|\bI (?:can(?:'t|not)|do not|don't) (?:hear|speak|talk)\b"
         r"|\b(?:running|operating) (?:on|at) (?:the )?(?:local network|optimal|full capacity)"
         r"|\binternal microphones?\b|\bsystems? (?:are|is) (?:active|online|operational)\b"
-        r"|\bsound waves\b|\baudio input\b",
+        r"|\bsound waves\b|\baudio input\b"
+        # Internal metrics spoken aloud: "confidence of 1.0", "95% confidence"
+        r"|\bconfidence (?:of |level |score )?\d|\b\d+(?:\.\d+)?\s?%?\s?confidence\b",
         re.I,
     )
     _FILLER_OPENER = re.compile(r"^(?:I see\.|I understand\.|I know\.|Sure\.)\s+", re.I)
