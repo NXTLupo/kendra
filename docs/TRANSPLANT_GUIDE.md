@@ -81,6 +81,8 @@ turn-timing metadata (the desktop app renders it; the robot just stores it).
 8. Transfer her memories from the iMac: dashboard → "Retrieve memories now"
    reversed, or `brain export-jsonl` on the iMac → import on the Pi
    (biometric identity DB never transfers by design; re-enroll faces).
+   Copy `data/second_brain/` verbatim (rsync) — her wiki, raw experience
+   log, and manifest are plain files and carry over unchanged.
 
 ### Phase T1 — the body (defer to V3 hardware gates, unchanged law)
 9. Build the chassis per the vendor manual, then run gates **A1–A9** from

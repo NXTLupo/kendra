@@ -9,6 +9,7 @@ from ..config import Settings
 from ..ipc import UnixJsonClient, UnixJsonServer
 from .backup import backup_sqlite, export_jsonl
 from .consolidator import BrainConsolidator
+from .second_brain import SecondBrain
 from .store import BrainStore
 
 LOG = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ class BrainService:
         self.settings = settings
         self.store = BrainStore.from_settings(settings)
         self.consolidator = BrainConsolidator(settings, self.store)
+        self.second_brain = SecondBrain(settings.path("brain.second_brain.dir"))
         self.server = UnixJsonServer(settings.socket_path("brain"), self.handle)
 
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
@@ -32,6 +34,13 @@ class BrainService:
         if method == "dashboard_snapshot":
             return self.store.dashboard_snapshot(limit=int(params.get("limit", 20)))
         if method == "remember":
+            # Consolidated memories also land in the raw experience log, so
+            # observations and learned facts reach the wiki compile step.
+            # System-provenance seeds skip it: docs/ already hold them.
+            if str(params.get("provenance") or "") != "system":
+                self.second_brain.ingest(
+                    str(params.get("kind") or "memory"), str(params.get("content") or "")
+                )
             return {"memory_id": self.store.remember(**params)}
         if method == "get_memory":
             return self.store.get_memory(int(params["memory_id"]))
@@ -47,7 +56,7 @@ class BrainService:
             )
             return [hit.as_dict() for hit in hits]
         if method == "context":
-            return self.store.context_for(
+            context = self.store.context_for(
                 str(params["query"]),
                 limit=int(params.get("limit", self.settings.get("brain.retrieval_limit", 12))),
                 character_budget=int(
@@ -59,6 +68,23 @@ class BrainService:
                 include_self_model=bool(params.get("include_self_model", True)),
                 exclude_kinds=params.get("exclude_kinds") or [],
             )
+            # Execute step of the second-brain loop: the best compiled wiki
+            # excerpt rides ahead of raw memories on every retrieval. File
+            # read, sub-millisecond, identical on the Pi.
+            try:
+                for hit in reversed(self.second_brain.lookup(str(params["query"]), limit=1)):
+                    context.setdefault("memories", []).insert(
+                        0,
+                        {
+                            "content": f"[your wiki: {hit['title']}] {hit['excerpt'][:280]}",
+                            "kind": "wiki",
+                            "provenance": "wiki",
+                            "created_at": "",
+                        },
+                    )
+            except Exception:
+                LOG.debug("Wiki lookup skipped", exc_info=True)
+            return context
         if method == "episode":
             return {"memory_id": self.store.add_episode(**params)}
         if method == "dream":
@@ -73,6 +99,14 @@ class BrainService:
             return {"ok": True}
         if method == "turn":
             self.store.add_turn(**params)
+            metadata = dict(params.get("metadata") or {})
+            if not str(metadata.get("source") or "").startswith("probe"):
+                self.second_brain.ingest(
+                    "turn",
+                    f"Jonathan: {params.get('user_text', '')}\n"
+                    f"Kendra: {params.get('kendra_text', '')}",
+                    {"session": params.get("session_id")},
+                )
             return {"ok": True}
         if method == "end_session":
             self.store.end_session(str(params["session_id"]))
@@ -104,11 +138,27 @@ class BrainService:
                 params.get("session_id"),
             )
         if method == "consolidate_research":
+            evidence = dict(params["evidence"])
+            query = str(evidence.get("query") or "")
+            self.second_brain.ingest(
+                "research",
+                (f"Question: {query}\n" if query else "") + f"Answer: {params['answer']}",
+            )
             return await self.consolidator.consolidate_research(
                 str(params["answer"]),
-                dict(params["evidence"]),
+                evidence,
                 params.get("session_id"),
             )
+        if method == "wiki_stats":
+            return self.second_brain.stats()
+        if method == "wiki_lookup":
+            return self.second_brain.lookup(
+                str(params["query"]), limit=int(params.get("limit", 3))
+            )
+        if method == "wiki_page":
+            return {"content": self.second_brain.read_page(str(params["slug"]))}
+        if method == "wiki_compile":
+            return await self.consolidator.compile_wiki(self.second_brain)
         if method == "backup":
             target = self.settings.path("brain.backup_dir")
             return {"path": str(backup_sqlite(self.store.conn, target))}
@@ -134,10 +184,25 @@ class BrainService:
                 row = self.store.conn.execute("SELECT MAX(created_at) FROM turns").fetchone()
                 last_turn = str(row[0] or "")
                 from datetime import UTC, datetime
+                idle_seconds = float("inf")
                 if last_turn:
-                    age = (datetime.now(UTC) - datetime.fromisoformat(last_turn)).total_seconds()
-                    if age < idle_minutes * 60:
-                        continue
+                    idle_seconds = (
+                        datetime.now(UTC) - datetime.fromisoformat(last_turn)
+                    ).total_seconds()
+                # Wiki compile runs on a much shorter leash than dreaming: a
+                # few quiet minutes and enough uncompiled raw entries. This
+                # is what makes the second brain self-updating within a
+                # session instead of only overnight.
+                if (
+                    idle_seconds
+                    >= float(self.settings.get("brain.second_brain.compile_idle_minutes", 5)) * 60
+                    and self.second_brain.pending_count()
+                    >= int(self.settings.get("brain.second_brain.compile_min_entries", 8))
+                ):
+                    result = await self.consolidator.compile_wiki(self.second_brain)
+                    LOG.info("Wiki compile: %s", result)
+                if idle_seconds < idle_minutes * 60:
+                    continue
                 now = datetime.now(UTC).timestamp()
                 if now - getattr(self, "_last_dream_at", 0.0) < float(
                     self.settings.get("brain.dreaming.min_interval_seconds", 21600)

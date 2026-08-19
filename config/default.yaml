@@ -148,6 +148,13 @@ brain:
     idle_minutes: 30
     min_interval_seconds: 21600
     check_interval_seconds: 900
+  # Karpathy-pattern second brain: immutable raw experience log compiled by
+  # her own idle agent into a markdown wiki, governed by MANIFEST.md. Plain
+  # files — the directory transplants to the Pi's NVMe untouched.
+  second_brain:
+    dir: ./data/second_brain
+    compile_min_entries: 8
+    compile_idle_minutes: 5
   backup_dir: ./exports/brain-backups
   jsonl_export_dir: ./exports/brain-jsonl
   import_dir: ./exports/brain-imports

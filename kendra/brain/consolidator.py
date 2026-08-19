@@ -318,3 +318,79 @@ RETRIEVED SOURCES:
             )
             stored.append(memory_id)
         return {"stored": stored, "rejected": rejected}
+
+    async def compile_wiki(self, sb) -> dict[str, Any]:
+        """The second-brain compile step: raw experience -> wiki pages.
+
+        Karpathy's pattern, run by her own idle agent: read uncompiled raw
+        entries against the manifest, distill them into standalone facts,
+        and upsert markdown concept pages. One bounded LLM call on the tool
+        slot. The 'kendra-self' page is mandatory whenever she formed an
+        opinion or feeling — that page is how her emotional growth stays
+        visible across sessions and hardware.
+        """
+        entries, cursor = sb.pending(limit=40)
+        if len(entries) < 4:
+            return {"reason": "too_few_raw_entries", "pending": len(entries)}
+        listing = "\n".join(
+            f"({e.get('kind', '?')}) {str(e.get('content', ''))[:220]}" for e in entries
+        )
+        prompt = f"""Compile Kendra's raw experience log into wiki pages. Return JSON only:
+{{"pages": [{{"slug": "kebab-case-topic", "title": "Topic", "facts": ["..."], "links": ["other-slug"]}}]}}
+Rules: 1 to 4 pages. A fact is one short standalone declarative sentence naming people explicitly (Jonathan, Kendra — never a bare pronoun). Questions and speculation are not facts. Never invent anything absent from the log. If the log shows Kendra forming an opinion, feeling, or preference, include a page with slug "kendra-self" whose facts each start with "Kendra".
+
+RAW LOG:
+{listing}"""
+        try:
+            raw = await self.llm.chat(
+                [
+                    {
+                        "role": "system",
+                        "content": "You compile Kendra's raw experience into her wiki. JSON only.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                response_schema={
+                    "type": "object",
+                    "properties": {
+                        "pages": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "slug": {"type": "string"},
+                                    "title": {"type": "string"},
+                                    "facts": {"type": "array", "items": {"type": "string"}},
+                                    "links": {"type": "array", "items": {"type": "string"}},
+                                },
+                                "required": ["slug", "title", "facts"],
+                            },
+                        }
+                    },
+                    "required": ["pages"],
+                },
+                temperature=0.0,
+                max_tokens=600,
+                id_slot=1,
+            )
+            parsed = json.loads(raw)
+        except Exception as exc:
+            LOG.warning("Wiki compile skipped: %s", exc)
+            return {"reason": f"compile_unavailable:{type(exc).__name__}"}
+        written = []
+        for page in list(parsed.get("pages", []))[:4]:
+            facts = [str(f) for f in page.get("facts", []) if str(f).strip()][:12]
+            if not facts:
+                continue
+            path = sb.upsert_page(
+                str(page.get("slug", "misc")),
+                str(page.get("title", "Misc")),
+                facts,
+                links=[str(lk) for lk in page.get("links", [])][:8],
+            )
+            written.append(path.stem)
+        # Advance the cursor even when zero pages came back: the entries were
+        # reviewed; re-reading them forever would wedge the compile loop.
+        sb.advance(cursor)
+        self.store.event("wiki_compile", {"entries": len(entries), "pages": written})
+        return {"entries": len(entries), "pages": written}
