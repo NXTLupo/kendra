@@ -494,31 +494,33 @@ class VisionService:
                 )
             except Exception:
                 LOG.debug("Post-move look unavailable", exc_info=True)
-            # Her thoughts are shared WITH Jonathan, not narrated to herself:
-            # second-person, conversational, no scene-report framing.
-            comment = "Something caught my eye — coming in for a closer look."
-            seen = ""
-            if after:
-                seen = str(after.get("description") or "").strip()
-                first_sentence = re.split(r"(?<=[.!?])\s+", seen)[0][:140] if seen else ""
-                names = [
-                    str(p.get("display_name"))
-                    for p in after.get("recognized_people", []) or []
-                    if isinstance(p, dict) and p.get("status") == "recognized" and p.get("display_name")
-                ]
-                people = int(after.get("people_in_view") or 0)
-                if names:
-                    comment = f"Hey {names[0]} — couldn't help coming over."
-                elif people:
-                    comment = "Couldn't help noticing you — I came over for a better look."
-                elif first_sentence:
-                    comment = "Something changed over here — " + first_sentence[0].lower() + first_sentence[1:]
+            # She speaks ambient thoughts ONLY when there is a person to
+            # speak to — describing an empty room aloud IS talking to
+            # herself. Person presence uses BOTH the face detector and the
+            # description text: YuNet missed Jonathan at an angle once and
+            # she narrated "a man sitting in a chair" into the room he was
+            # sitting in.
+            seen = str((after or {}).get("description") or "").strip()
+            names = [
+                str(p.get("display_name"))
+                for p in (after or {}).get("recognized_people", []) or []
+                if isinstance(p, dict) and p.get("status") == "recognized" and p.get("display_name")
+            ]
+            person_present = bool(
+                names
+                or int((after or {}).get("people_in_view") or 0) > 0
+                or re.search(r"\b(man|woman|person|people|someone|somebody|he|she|guy)\b", seen, re.I)
+            )
+            if not person_present:
+                return  # observe silently; the memory above is enough
+            comment = (
+                f"Hey {names[0]} — couldn't help coming over."
+                if names
+                else "Couldn't help noticing you — I came over for a better look."
+            )
             await self._comment(comment)
-            # Unprompted curiosity: one short question about what she found —
-            # about the person when someone is here (she is social and drawn
-            # to people), otherwise about the thing itself.
             if bool(self.settings.get("vision.ambient.ask_questions", True)) and seen:
-                await self._ask_curious_question(seen, people_present=bool(after and (after.get("people_in_view") or 0) > 0))
+                await self._ask_curious_question(seen, people_present=True)
             from ..brain.service import BrainClient
 
             await BrainClient(self.settings).remember(
@@ -544,9 +546,8 @@ class VisionService:
 
             llm = LlamaCppClient(self.settings)
             focus = (
-                "a person is here — ask them one short, warm, genuinely curious question"
-                if people_present
-                else "ask one short wondering question about what you noticed"
+                "the person in front of you is the one you are talking to — ask THEM "
+                "one short, warm question addressed as 'you'; never say 'he', 'she', or 'the man'"
             )
             question = (await llm.chat(
                 [
