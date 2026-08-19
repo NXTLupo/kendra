@@ -505,6 +505,11 @@ class VisionService:
                 if pieces:
                     comment = "Taking a closer look. " + " ".join(pieces)
             await self._comment(comment)
+            # Unprompted curiosity: one short question about what she found —
+            # about the person when someone is here (she is social and drawn
+            # to people), otherwise about the thing itself.
+            if bool(self.settings.get("vision.ambient.ask_questions", True)) and seen:
+                await self._ask_curious_question(seen, people_present=bool(after and (after.get("people_in_view") or 0) > 0))
             from ..brain.service import BrainClient
 
             await BrainClient(self.settings).remember(
@@ -516,6 +521,45 @@ class VisionService:
             )
         except Exception:
             LOG.debug("Curiosity approach unavailable", exc_info=True)
+
+    async def _ask_curious_question(self, scene: str, people_present: bool) -> None:
+        """Her curiosity, out loud: one short unprompted question.
+
+        People take priority — she approaches, greets, and asks THEM
+        something (social by identity). Objects get a wondering question.
+        Generated on the warm conversation slot, spoken politely (never over
+        an active conversation), and remembered as her own question.
+        """
+        try:
+            from ..llm import LlamaCppClient
+
+            llm = LlamaCppClient(self.settings)
+            focus = (
+                "a person is here — ask them one short, warm, genuinely curious question"
+                if people_present
+                else "ask one short wondering question about what you noticed"
+            )
+            question = (await llm.chat(
+                [
+                    {"role": "system", "content": "You are Kendra, a warm, deeply curious robot companion. Reply with ONE spoken question of at most 14 words. No preamble."},
+                    {"role": "user", "content": f"You just noticed: {scene[:280]}\n{focus}."},
+                ],
+                max_tokens=30,
+                temperature=0.8,
+                id_slot=0,
+            )).strip().strip('"')
+            if not question or "?" not in question:
+                return
+            await self._comment(question)
+            await BrainClient(self.settings).remember(
+                kind="kendra_opinion",
+                content=("I found myself wondering: " + question)[:200],
+                provenance="inferred",
+                confidence=0.6,
+                salience=0.4,
+            )
+        except Exception:
+            LOG.debug("Curious question unavailable", exc_info=True)
 
     async def _comment(self, text: str) -> None:
         """Speak a short movement comment aloud — politely (never over an

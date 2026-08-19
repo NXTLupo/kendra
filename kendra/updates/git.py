@@ -40,7 +40,17 @@ class GitUpdateInspector:
         if expected_url and actual_url != expected_url:
             raise RuntimeError("Configured update remote does not match the pinned repository URL")
         if fetch:
-            self._git("fetch", "--quiet", "--no-tags", self.remote, self.branch, timeout=60)
+            try:
+                self._git("fetch", "--quiet", "--no-tags", self.remote, self.branch, timeout=60)
+            except Exception as exc:
+                # A missing remote branch or an offline network is a state to
+                # report, not an error to throw at the dashboard.
+                return {
+                    "current_commit": self._git("rev-parse", "HEAD"),
+                    "remote_commit": None,
+                    "upgrade_available": False,
+                    "note": f"remote unavailable: {str(exc)[:120]}",
+                }
             remote_ref = "FETCH_HEAD"
         else:
             remote_ref = f"refs/remotes/{self.remote}/{self.branch}"
