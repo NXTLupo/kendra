@@ -101,6 +101,13 @@ class AgentRuntime:
         for name, phrases in keyword_groups.items():
             if any(phrase in text for phrase in phrases):
                 selected.add(name)
+        # Force-research gate: current-events questions that dodge every
+        # keyword ("who won the game last night?", "what's happening in the
+        # world?") fell into plain chat, where a 2B model confidently
+        # invents an answer. Freshness-shaped questions ALWAYS research;
+        # her researched-memory cache still answers repeats instantly.
+        if AgentRuntime._FORCE_RESEARCH.search(user_text):
+            selected.add("research")
         if re.search(r"\blook (?:up|down)\s*[.!?]?\s*$", text):
             selected.add("look")
         if AgentRuntime._SIGHT_INTENT.search(text):
@@ -361,6 +368,34 @@ remembered, researched, or did something unless the context supports it.
                 return answer
         return None
 
+    def _consolidate_research_soon(
+        self, user_text: str, final_text: str, evidence: dict, session_id: str
+    ) -> None:
+        """Background: researched answers become memories AND wiki pages.
+
+        The research bypasses replaced the planner tool rounds but never
+        inherited their consolidation step — so nothing she researched was
+        remembered, the 45-minute brain-cache stayed empty, and every repeat
+        question paid the network again."""
+        payload = dict(evidence or {})
+        payload.setdefault("query", user_text[:200])
+
+        async def go() -> None:
+            try:
+                await asyncio.sleep(float(self.settings.get("brain.consolidation_idle_seconds", 8)))
+                await self._wait_until_idle()
+                async with self._consolidation_lock:
+                    await self.brain.rpc.call(
+                        "consolidate_research",
+                        {"answer": final_text, "evidence": payload, "session_id": session_id},
+                    )
+            except Exception:
+                LOG.exception("Bypass research consolidation failed")
+
+        task = asyncio.create_task(go(), name="kendra-research-consolidation")
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
+
     async def _recent_research_memories(self, query: str) -> list[dict[str, Any]]:
         """Her second brain as a research cache.
 
@@ -618,6 +653,22 @@ remembered, researched, or did something unless the context supports it.
                 "content": "Found it: honeybees vote on new nest sites by dancing — the swarm literally decides by ballot.",
             },
         ]
+
+    _WHO_QUESTION = re.compile(
+        r"\bwho (?:do you see|is (?:this|that|it|here|in the room|with (?:me|us))|am i(?: with)?)"
+        r"|\bwho'?s (?:this|that|here|in the room|with (?:me|us))"
+        r"|\b(?:the )?(?:person|people)(?:'s)? names?\b|\bname of (?:the |this |that )?person\b"
+        r"|\bdo you (?:recognize|know) (?:me|them|him|her|this person)\b",
+        re.I,
+    )
+
+    _FORCE_RESEARCH = re.compile(
+        r"\b(?:news|headlines?|weather|forecast|scores?|stocks?|election|"
+        r"who won|what happened|happening (?:in|with|around)|what'?s going on|"
+        r"in the world|current events?|breaking|announced?|released?)\b"
+        r"|\bwhat(?:'s| is) (?:new|the latest)\b",
+        re.I,
+    )
 
     _SIGHT_INTENT = re.compile(
         r"\b(?:"
@@ -1067,6 +1118,8 @@ remembered, researched, or did something unless the context supports it.
                     max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
                 ),
             )
+            if evidence.get("mode") != "brain-cache" and evidence.get("sources"):
+                self._consolidate_research_soon(user_text, final_text, evidence, session_id)
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, autonomous=autonomous
             )
@@ -1082,6 +1135,24 @@ remembered, researched, or did something unless the context supports it.
                     source=source,
                     autonomous=autonomous,
                 )
+            if self._WHO_QUESTION.search(user_text):
+                names = observation.get("recognized_people_names") or []
+                people = int(observation.get("people_in_view") or 0)
+                if names:
+                    final_text = f"That's {' and '.join(names)}!"
+                elif people > 0:
+                    final_text = (
+                        "I can see someone, but I don't know them yet — "
+                        "let me introduce myself!"
+                    )
+                else:
+                    final_text = "I don't see anyone in view right now."
+                result = await self._remember_plain_turn(
+                    session_id, user_text, final_text, source=source, autonomous=autonomous
+                )
+                if people > 0 and not names:
+                    result["meet_person"] = True
+                return result
             # Pure sight question: she has already looked, so there is no
             # decision left for the planner. Answer directly on the prewarmed
             # conversation prefix — one streamable LLM call instead of two
@@ -1396,6 +1467,28 @@ remembered, researched, or did something unless the context supports it.
                 return await self._remember_plain_turn(
                     session_id, user_text, final_text, source=source, streamed=True
                 )
+            if self._WHO_QUESTION.search(user_text):
+                # Identity questions are answered by her face recognizer,
+                # deterministically — and an unfamiliar face launches the
+                # meet ritual the moment this reply finishes.
+                names = observation.get("recognized_people_names") or []
+                people = int(observation.get("people_in_view") or 0)
+                if names:
+                    final_text = f"That's {' and '.join(names)}!"
+                elif people > 0:
+                    final_text = (
+                        "I can see someone, but I don't know them yet — "
+                        "let me introduce myself!"
+                    )
+                else:
+                    final_text = "I don't see anyone in view right now."
+                await on_delta(final_text, "delighted" if names else "curious")
+                result = await self._remember_plain_turn(
+                    session_id, user_text, final_text, source=source, streamed=True
+                )
+                if people > 0 and not names:
+                    result["meet_person"] = True
+                return result
         else:
             memory = await self.brain.context(
                 self._memory_query(user_text, observation), exclude_kinds=["episode"]
@@ -1523,6 +1616,8 @@ remembered, researched, or did something unless the context supports it.
                 await on_delta(cleaned or lead_buffer, "curious")
             final_text = "".join(final_text_parts).strip() or "My search came back empty."
             final_text = capability_lead.sub("", self._FILLER_OPENER.sub("", final_text)).strip()
+            if evidence.get("mode") != "brain-cache" and evidence.get("sources"):
+                self._consolidate_research_soon(user_text, final_text, evidence, session_id)
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, streamed=True
             )

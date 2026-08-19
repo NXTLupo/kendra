@@ -46,6 +46,16 @@ class ResearchConsolidation(BaseModel):
     claims: list[ResearchClaim] = Field(default_factory=list)
 
 
+def _normalize_confidence(payload: dict) -> dict:
+    """The 2B model sometimes writes confidence as a percentage (100) —
+    clamp instead of discarding the whole consolidation on validation."""
+    for item in payload.get("memories", []) or []:
+        value = item.get("confidence")
+        if isinstance(value, (int, float)) and value > 1:
+            item["confidence"] = min(1.0, float(value) / 100.0)
+    return payload
+
+
 class BrainConsolidator:
     """Conservative local-model memory extraction with deterministic provenance checks."""
 
@@ -88,7 +98,7 @@ KENDRA RESPONSE FOR CONTEXT ONLY; DO NOT TREAT AS EVIDENCE:
                 response_schema=Consolidation.model_json_schema(),
                 temperature=0.0,
             )
-            parsed = Consolidation.model_validate(json.loads(raw))
+            parsed = Consolidation.model_validate(_normalize_confidence(json.loads(raw)))
         except Exception as exc:
             LOG.warning("Memory consolidation skipped: %s", exc)
             return {"stored": [], "reason": f"consolidation_unavailable:{type(exc).__name__}"}
@@ -291,7 +301,7 @@ RETRIEVED SOURCES:
                 response_schema=ResearchConsolidation.model_json_schema(),
                 temperature=0.0,
             )
-            parsed = ResearchConsolidation.model_validate(json.loads(raw))
+            parsed = ResearchConsolidation.model_validate(_normalize_confidence(json.loads(raw)))
         except Exception as exc:
             return {"stored": [], "reason": f"research_consolidation_unavailable:{type(exc).__name__}"}
 

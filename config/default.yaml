@@ -197,6 +197,10 @@ vision:
     motion_threshold: 10.0
     min_interval_seconds: 180
     quiet_gap_seconds: 90
+    # Reflex greeting: an unfamiliar face triggers approach + introduction +
+    # name capture + face enrollment + second-brain person page.
+    meet_new_people: true
+    meet_cooldown_seconds: 300
     check_interval_seconds: 30
   socket: vision.sock
   camera_provider: opencv

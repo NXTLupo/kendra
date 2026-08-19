@@ -138,6 +138,34 @@ class BrainService:
                 str(params["kendra_text"]),
                 params.get("session_id"),
             )
+        if method == "meet_person":
+            # The meet ritual's storage step: the person lands in her second
+            # brain (raw + a dedicated wiki page) and her associative memory,
+            # alongside the face embeddings the vision service just enrolled.
+            name = str(params["name"]).strip()
+            person_uid = params.get("person_uid")
+            self.second_brain.ingest(
+                "person",
+                f"Kendra met {name} in person, introduced herself, and enrolled "
+                f"their face so she will always recognize them.",
+                {"person_uid": person_uid},
+            )
+            self.second_brain.upsert_page(
+                f"person-{self.second_brain.slugify(name)}",
+                name,
+                [
+                    f"{name} is a person Kendra met in person and can recognize by face.",
+                ],
+                links=["people"],
+            )
+            self.store.remember(
+                kind="relationship",
+                content=f"Kendra met {name} in person and will recognize them by sight.",
+                provenance="observed",
+                confidence=1.0,
+                salience=0.9,
+            )
+            return {"ok": True}
         if method == "consolidate_research":
             evidence = dict(params["evidence"])
             query = str(evidence.get("query") or "")
@@ -145,6 +173,27 @@ class BrainService:
                 "research",
                 (f"Question: {query}\n" if query else "") + f"Answer: {params['answer']}",
             )
+            # Immediate wiki page too — not just raw awaiting the idle
+            # compile: a repeat question must be one fast file read away.
+            answer = str(params["answer"]).strip()
+            if answer:
+                import re as _re
+
+                words = [
+                    w
+                    for w in _re.findall(r"[a-z0-9]+", query.casefold())
+                    if len(w) > 2
+                    and w not in {"the", "and", "for", "what", "who", "how", "why",
+                                  "when", "where", "about", "tell", "latest", "current",
+                                  "today", "news", "please", "kendra"}
+                ][:5]
+                slug = "research-" + self.second_brain.slugify(" ".join(words) or answer[:40])
+                self.second_brain.upsert_page(
+                    slug,
+                    (query or answer[:60]).strip()[:70],
+                    [answer[:400]],
+                    links=["research"],
+                )
             return await self.consolidator.consolidate_research(
                 str(params["answer"]),
                 evidence,

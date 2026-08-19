@@ -523,6 +523,30 @@ class VisionService:
             )
             if not person_present:
                 return  # observe silently; the memory above is enough
+            # Reflex: an unfamiliar face means she walks over (just did) and
+            # introduces herself — the meet ritual runs in the voice service.
+            # Cooldown so a missed name capture doesn't loop the greeting.
+            unknown_faces = [
+                q
+                for q in (after or {}).get("recognized_people", []) or []
+                if isinstance(q, dict) and q.get("status") != "recognized"
+            ]
+            if (
+                unknown_faces
+                and not names
+                and bool(self.settings.get("vision.ambient.meet_new_people", True))
+                and time.time() - getattr(self, "_last_meet_at", 0.0)
+                > float(self.settings.get("vision.ambient.meet_cooldown_seconds", 300))
+            ):
+                self._last_meet_at = time.time()
+                try:
+                    voice = UnixJsonClient(self.settings.runtime_dir / "voice.sock", timeout=10)
+                    started = await voice.call("meet_person", {})
+                    LOG.info("Meet ritual: %s", started)
+                    if started.get("ok"):
+                        return
+                except Exception:
+                    LOG.debug("Meet ritual unavailable", exc_info=True)
             comment = (
                 f"Hey {names[0]} — couldn't help coming over."
                 if names

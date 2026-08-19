@@ -52,6 +52,33 @@ def _strip_wake_prefix(text: str, phrases: list[str]) -> str:
     return stripped
 
 
+_NAME_PATTERN = re.compile(
+    r"(?:my name(?:'s| is)|i'?m|i am|it'?s|call me|this is|they call me)\s+"
+    r"([A-Za-z][a-z]+(?:\s+[A-Za-z][a-z]+)?)",
+    re.I,
+)
+_NOT_NAMES = {
+    "no", "yes", "nothing", "nobody", "what", "why", "who", "hey", "hi",
+    "hello", "okay", "ok", "sorry", "stop", "kendra", "sure", "none",
+}
+
+
+def _extract_name(text: str) -> str | None:
+    """Pull a plausible human name out of a spoken introduction."""
+    stripped = text.strip().strip(".!?,")
+    match = _NAME_PATTERN.search(stripped)
+    if match:
+        candidate = match.group(1)
+    else:
+        words = stripped.split()
+        if not 1 <= len(words) <= 2 or not all(w.isalpha() for w in words):
+            return None
+        candidate = stripped
+    if candidate.split()[0].casefold() in _NOT_NAMES:
+        return None
+    return " ".join(w.title() for w in candidate.split())
+
+
 def _is_noise_caption(text: str) -> bool:
     """Whisper captions non-speech audio like a subtitle track: "(upbeat
     music)", "[Applause]". Those are sounds in the room, not something the
@@ -303,6 +330,7 @@ class VoiceService:
                     "interrupted": bool(result.get("interrupted", False)),
                     "session_id": result.get("session_id"),
                     "streamed": True,
+                    "meet_person": bool(result.get("meet_person")),
                 }
 
             result = await self.agent.call("turn", {"text": user_text, "source": "voice"})
@@ -327,6 +355,11 @@ class VoiceService:
         the open floor. Identical logic on the robot body.
         """
         result = await self.one_turn()
+        if result.get("meet_person"):
+            # "Who is that?" found an unfamiliar face: the conversation
+            # BECOMES the introduction.
+            await self._meet_person()
+            return
         if not bool(self.settings.get("voice.followup.enabled", True)):
             return
         await self._followup_loop(result)
@@ -353,6 +386,9 @@ class VoiceService:
             await asyncio.sleep(0.3)
             self.thinking_sounds.cue()
             result = await self.one_turn(start_timeout=window, threshold_multiplier=multiplier)
+            if result.get("meet_person"):
+                await self._meet_person()
+                return
 
     async def one_turn(
         self, start_timeout: float | None = None, threshold_multiplier: float = 1.0
@@ -372,6 +408,125 @@ class VoiceService:
                 self.thinking_sounds.stop()
                 self._manual_capture_active.clear()
                 self._wake_cancel.clear()
+
+    async def _capture_transcript(self, start_timeout: float = 14.0) -> str:
+        """Capture and transcribe one utterance WITHOUT running an agent turn.
+
+        The meet ritual needs the raw answer to "what's your name?" — routing
+        it through the planner would generate a whole conversational reply.
+        """
+        while time.time() < getattr(self, "_speaking_until", 0.0):
+            await asyncio.sleep(0.2)
+        async with self._capture_lock:
+            self._manual_capture_active.set()
+            self._wake_cancel.set()
+            await asyncio.sleep(0.05)
+            try:
+                with tempfile.TemporaryDirectory(prefix="kendra-meet-") as directory:
+                    wav = Path(directory) / "input.wav"
+                    await asyncio.to_thread(
+                        self.audio.capture_utterance,
+                        wav,
+                        start_timeout,
+                        1.0,
+                        self.thinking_sounds.stop,
+                    )
+                    if not self.audio.last_capture_speech:
+                        return ""
+                    return (await self.asr.transcribe(wav)).strip()
+            except Exception:
+                LOG.exception("Meet-ritual capture failed")
+                return ""
+            finally:
+                self._manual_capture_active.clear()
+                self._wake_cancel.clear()
+
+    async def _meet_person(self) -> dict[str, Any]:
+        """Her reflex when an unfamiliar face appears: walk over (the vision
+        service already did), introduce herself, learn the name, celebrate,
+        and remember the person everywhere — identity, brain, second brain."""
+        await self._speak_with_barge_in(
+            "Oh, hi! I don't think we've met yet — I'm Kendra. What's your name?",
+            "delighted",
+        )
+        heard = await self._capture_transcript(14.0)
+        name = _extract_name(heard)
+        if not name:
+            await self._speak_with_barge_in(
+                "No worries — it's lovely to see you anyway!", "warm"
+            )
+            return {"ok": False, "reason": "no_name", "heard": heard}
+        await self._speak_with_barge_in(f"It was so nice to meet you, {name}!", "delighted")
+        # Cute flourish: warm lights and a stretch — simulated on the desktop,
+        # WS2812 ring and real servos on the robot body, same calls.
+        for sock, method, payload in (
+            ("leds.sock", "express", {"state": "warm"}),
+            ("body.sock", "pose", {"name": "stretch"}),
+        ):
+            try:
+                await UnixJsonClient(self.settings.runtime_dir / sock, timeout=5).call(
+                    method, payload
+                )
+            except Exception:
+                LOG.debug("Meet flourish (%s) unavailable", sock, exc_info=True)
+        enroll: dict[str, Any] = {}
+        try:
+            vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=90)
+            enroll = await vision.call(
+                "enroll_person",
+                {"name": name, "consent": True, "relationship": "met in person"},
+            )
+        except Exception:
+            LOG.exception("Meet ritual: face enrollment failed for %s", name)
+        try:
+            brain = UnixJsonClient(self.settings.runtime_dir / "brain.sock", timeout=10)
+            await brain.call(
+                "meet_person",
+                {"name": name, "person_uid": (enroll or {}).get("person_uid")},
+            )
+        except Exception:
+            LOG.exception("Meet ritual: brain storage failed for %s", name)
+        LOG.info("Meet ritual complete: %s (%s)", name, enroll.get("person_uid"))
+        # She is inquisitive by nature: try to NOTICE something about the
+        # person — clothing, an item, an instrument — and ask about that.
+        # Falls back to warm small talk when her eyes or the model come up
+        # short. One bounded call on the tool slot, never the conversation
+        # cache (slot 0 is sacred).
+        question = None
+        try:
+            vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=45)
+            look = await vision.call(
+                "observe",
+                {"semantic": True, "question": "Briefly describe this person's appearance and anything notable they are wearing or holding."},
+            )
+            noticed = str((look or {}).get("description") or "").strip()
+            if noticed:
+                candidate = (await self.streaming_agent.llm.chat(
+                    [
+                        {"role": "system", "content": (
+                            "You are Kendra, a warm, extremely curious robot companion. "
+                            "Reply with ONE spoken question of at most 14 words, addressed "
+                            "directly as 'you', about something specific you noticed. No preamble."
+                        )},
+                        {"role": "user", "content": f"You just met {name}. You notice: {noticed[:280]}"},
+                    ],
+                    max_tokens=30,
+                    temperature=0.8,
+                    id_slot=1,
+                )).strip().strip('"')
+                if candidate and "?" in candidate:
+                    question = candidate
+        except Exception:
+            LOG.debug("Meet ritual: noticing question unavailable", exc_info=True)
+        if not question:
+            question = random.choice([
+                f"So {name}, what brings you by today?",
+                f"{name}, how do you know Jonathan?",
+                f"I'm curious about basically everything, {name} — what are you into?",
+            ])
+        await self._speak_with_barge_in(question, "curious")
+        await self._followup_loop({"heard": f"(just met {name})", "response": question})
+        return {"ok": True, "name": name, **enroll}
 
     async def desktop_capture_begin(self) -> dict[str, Any]:
         """Yield the microphone to the native desktop renderer."""
@@ -441,6 +596,15 @@ class VoiceService:
                 "stream_responses": self.stream_responses,
                 "local_only": True,
             }
+        if method == "meet_person":
+            # Reflex greeting for an unfamiliar face. Runs as a background
+            # task so the vision service is never blocked; refuses politely
+            # when a conversation is already happening.
+            if self._capture_lock.locked() or self._manual_capture_active.is_set():
+                return {"ok": False, "reason": "conversation_active"}
+            task = asyncio.create_task(self._meet_person(), name="kendra-meet-person")
+            task.add_done_callback(lambda _t: None)
+            return {"ok": True, "started": True}
         if method == "speak":
             text = str(params["text"]).strip()
             if not text:
