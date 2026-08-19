@@ -1139,6 +1139,57 @@ remembered, researched, or did something unless the context supports it.
                     source=source,
                     autonomous=autonomous,
                 )
+        if allowed_tools == {"recall"}:
+            # Parity with the voice stream path: memory questions answer on
+            # the warm conversation slot. Without this, turn() fell through
+            # to the full planner — a 3,755-token slot-1 prompt, measured
+            # 53s of pure prefill for "what do you remember about X".
+            recall_query = re.sub(
+                r"^(?:hey\s+)?(?:do you remember|what do you remember about|do you recall|can you recall|remember)\s*[,:]?\s*",
+                "",
+                user_text,
+                flags=re.I,
+            ).strip() or user_text
+            try:
+                ctx = await self.brain.context(
+                    recall_query,
+                    limit=6,
+                    character_budget=1400,
+                    include_self_model=False,
+                    exclude_kinds=["episode"],
+                )
+                hits = list(ctx.get("memories", []))
+            except Exception:
+                hits = []
+            _timings = getattr(self, "_turn_timings", None)
+            if _timings is not None:
+                _timings["kind"] = "memory"
+            recalled = [
+                {"when": str(h.get("created_at", ""))[:16], "note": str(h.get("content", ""))[:220]}
+                for h in hits[:4]
+            ]
+            note = (
+                "WHAT YOUR MEMORY RETURNED — these are your own accurate memories; "
+                "trust them fully, including plans for your future body (answer "
+                "from them; only if empty say you have no memory of it):\n"
+                + json.dumps(recalled, ensure_ascii=False)
+            )
+            final_text = (
+                await self.llm.chat(
+                    [
+                        {"role": "system", "content": self._conversation_prompt()},
+                        *self._style_exemplars(),
+                        *await self._history_messages(user_text),
+                        {"role": "system", "content": note},
+                        {"role": "user", "content": user_text},
+                    ],
+                    max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
+                    id_slot=self.CONVERSATION_SLOT,
+                )
+            ).strip() or "Nothing surfaced from memory."
+            return await self._remember_plain_turn(
+                session_id, user_text, final_text, source=source, autonomous=autonomous
+            )
         if allowed_tools == {"research"}:
             # Pure research question: her own brain first (fresh researched
             # memories answer instantly), the network second, one streamed
@@ -1598,12 +1649,16 @@ remembered, researched, or did something unless the context supports it.
                 flags=re.I,
             ).strip() or user_text
             try:
-                hits = await self.brain.search(recall_query, 6)
+                ctx = await self.brain.context(
+                    recall_query,
+                    limit=6,
+                    character_budget=1400,
+                    include_self_model=False,
+                    exclude_kinds=["episode"],
+                )
+                hits = list(ctx.get("memories", []))
             except Exception:
                 hits = []
-            # Raw episodes are excluded: they contain her own past mistakes
-            # verbatim, and a fresh wrong answer outranked the true memory.
-            hits = [h for h in hits if h.get("kind") != "episode"]
             timings = getattr(self, "_turn_timings", None)
             if timings is not None:
                 timings["kind"] = "memory"
