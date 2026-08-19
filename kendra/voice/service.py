@@ -216,9 +216,13 @@ class VoiceService:
             if queue.empty() and not producer.done():
                 # She spoke an acknowledgment (or a phrase) and the slow
                 # work continues: bring the thinking blips back so the wait
-                # never reads as a hang. They stop when the next phrase
-                # speaks or when Jonathan starts talking.
-                self.thinking_sounds.cue()
+                # never reads as a hang. start(), not cue() — cue is one
+                # single listening tone, and using it here left the whole
+                # 10-60s sight/research stretch after the ack in silence.
+                # The loop stops when the next phrase speaks (L97) and
+                # self-caps at 90s; its 0.9s onset means a quickly-arriving
+                # next phrase never blips at all.
+                self.thinking_sounds.start()
 
         if was_interrupted:
             with contextlib.suppress(asyncio.CancelledError, Exception):
