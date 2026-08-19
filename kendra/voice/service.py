@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 import re
 import tempfile
 import threading
@@ -260,6 +261,18 @@ class VoiceService:
             if user_text.strip().lower() in {"stop", "kendra stop", "stop kendra"}:
                 await self._spoken_stop("spoken secondary stop")
                 return {"heard": user_text, "response": "Stopped.", "affect": "alert", "end_conversation": True}
+            # Mic checks are phatic — the alive answer is an instant one.
+            # Sent to the LLM, Gemma answers with device diagnostics ("my
+            # internal microphones are active") no matter how it's steered.
+            if re.search(r"\b(?:can|do) you hear me\b|\bare you (?:listening|there|awake)\b|\byou there\b", lowered):
+                reply = random.choice([
+                    "Loud and clear.",
+                    "Yep, I hear you.",
+                    "I hear you just fine. What's up?",
+                    "Right here. Go ahead.",
+                ])
+                await self._speak_with_barge_in(reply, "warm")
+                return {"heard": user_text, "response": reply}
 
             if self.stream_responses:
                 result = await self._stream_and_speak(user_text)

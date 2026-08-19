@@ -43,8 +43,11 @@ if [ "${KENDRA_BRAIN_VISION:-0}" = "1" ]; then
   case "$MODEL" in *gemma4*|*gemma-4*) [ -f "$MMPROJ" ] && VISION_ARGS="--mmproj $MMPROJ" ;; esac
 fi
 mkdir -p "$ROOT/runtime/slots"
+# --mlock pins the weights in RAM: without it, a half hour of desktop use
+# paged her brain to swap and the first turn after idle took 117 s at
+# 5.5 s/token while pages faulted back in. Same flag on the Pi units.
 exec "$SERVER" -m "$MODEL" $VISION_ARGS --host 127.0.0.1 --port 8080 -c 12288 -np 2 \
   --slots --slot-save-path "$ROOT/runtime/slots/" \
-  \
+  --mlock \
   --threads "$CPU_THREADS" --reasoning auto --reasoning-budget 128 --cache-reuse 256 \
   --cors-origins localhost --no-cors-credentials

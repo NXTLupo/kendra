@@ -698,7 +698,15 @@ remembered, researched, or did something unless the context supports it.
             await asyncio.sleep(1.0)
 
     _CAPABILITY_TALK = re.compile(
-        r"\bI (?:can|could) (?:look|check|search|find|go online)|want me to\b", re.I
+        r"\bI (?:can|could) (?:look|check|search|find|go online)|want me to\b"
+        # Gemma's diagnostics tic: "can you hear me?" answered with system
+        # talk ("I can process your voice. I am running on the local
+        # network") instead of a plain living "Yes, loud and clear."
+        r"|\b(?:process|processing|analyze|analyzing) (?:your|the|my) (?:voice|audio|sound|input)"
+        r"|\b(?:running|operating) (?:on|at) (?:the )?(?:local network|optimal|full capacity)"
+        r"|\binternal microphones?\b|\bsystems? (?:are|is) (?:active|online|operational)\b"
+        r"|\bsound waves\b|\baudio input\b",
+        re.I,
     )
     _FILLER_OPENER = re.compile(r"^(?:I see\.|I understand\.|I know\.|Sure\.)\s+", re.I)
 

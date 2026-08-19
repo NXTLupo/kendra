@@ -25,5 +25,5 @@ fi
 # --no-jinja: Moondream's vicuna-style template drops the image marker under
 # the jinja engine; the legacy path places media correctly.
 exec "$SERVER" -m "$MODEL" --mmproj "$MMPROJ" --host 127.0.0.1 --port 8081 -c 2048 -np 1 \
-  --threads 4 --no-jinja \
+  --threads 4 --no-jinja --mlock \
   --cors-origins localhost --no-cors-credentials
