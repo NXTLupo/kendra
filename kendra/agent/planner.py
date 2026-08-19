@@ -549,6 +549,40 @@ remembered, researched, or did something unless the context supports it.
             "like 'move to your left' and I'll do it."
         )
 
+    _DIAGNOSTIC_INTENT = re.compile(
+        r"\brun a (?:full )?diagnostic\b|\bdiagnose yourself\b|\bcheck yourself\b"
+        r"|\bare you (?:okay|ok|alright|working)\b|\bwhat'?s wrong\b|\bhow are your systems\b"
+        r"|\bcheck your (?:camera|legs|eyes|ears|memory|body)\b|\bself[- ]check\b"
+        r"|\bstatus report\b|\bsystem check\b",
+        re.I,
+    )
+
+    async def _diagnostic_turn(self, user_text: str) -> tuple[str, dict] | None:
+        """'Kendra, run a diagnostic' — a spoken intent, not a tool round.
+
+        Deterministic, so it works when the model is confused or slow, and
+        beginner-first: she says what she found in plain words and offers
+        the technical report rather than reciting it.
+        """
+        if not self._DIAGNOSTIC_INTENT.search(user_text):
+            return None
+        from ..health.spoken import SpokenDiagnostics
+
+        timings = getattr(self, "_turn_timings", None)
+        if timings is not None:
+            timings["kind"] = "diagnostic"
+        diagnostics = SpokenDiagnostics(self.settings)
+        deep = bool(re.search(r"\bfull\b|\brun a diagnostic\b|\bsystem check\b", user_text, re.I))
+        try:
+            report = await asyncio.wait_for(
+                diagnostics.full() if deep else diagnostics.quick(), timeout=60.0
+            )
+        except Exception:
+            return ("I tried to check myself and couldn't finish. That itself is worth a look.", {})
+        spoken = " ".join(report.get("owner_script") or ["I finished checking myself."])
+        return (spoken, {"diagnostic": {k: v for k, v in report.items() if k != "checks"},
+                         "checks": report.get("checks", [])})
+
     async def _movement_turn(self, user_text: str, on_delta=None) -> tuple[str, dict] | None:
         """Deterministic locomotion: parse, announce, move, report.
 
@@ -1343,6 +1377,14 @@ remembered, researched, or did something unless the context supports it.
         autonomous: bool,
     ) -> dict[str, Any]:
         await self.brain.begin_session(session_id, context=source)
+        diagnostic = await self._diagnostic_turn(user_text)
+        if diagnostic is not None:
+            spoken, meta = diagnostic
+            result = await self._remember_plain_turn(
+                session_id, user_text, spoken, source=source, autonomous=autonomous,
+            )
+            result["diagnostic"] = meta
+            return result
         movement = await self._movement_turn(user_text)
         if movement is not None:
             spoken, meta = movement
@@ -1774,6 +1816,15 @@ remembered, researched, or did something unless the context supports it.
         source: str,
     ) -> dict[str, Any]:
         await self.brain.begin_session(session_id, context=source)
+        diagnostic = await self._diagnostic_turn(user_text)
+        if diagnostic is not None:
+            spoken, meta = diagnostic
+            await on_delta(spoken, "warm")
+            result = await self._remember_plain_turn(
+                session_id, user_text, spoken, source=source, streamed=True,
+            )
+            result["diagnostic"] = meta
+            return result
         movement = await self._movement_turn(user_text, on_delta=on_delta)
         if movement is not None:
             spoken, meta = movement
