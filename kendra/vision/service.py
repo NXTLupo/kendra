@@ -248,7 +248,24 @@ class VisionService:
             await asyncio.sleep(capture_gap)
         if len(vectors) < 3:
             raise RuntimeError("Enrollment needs at least three captures containing exactly one clear face")
-        person_uid = await self.identity.create(name.strip(), consent=True, relationship=relationship)
+        # Duplicate-person guard: a momentary recognition miss once made the
+        # meet ritual re-enroll Jonathan as "John We" — two identities, one
+        # face. If this face already matches someone (relaxed threshold),
+        # ADD samples to that person instead of inventing a new one.
+        existing_uid: str | None = None
+        try:
+            match = await self.identity.match(vectors[0])
+            if match.get("person_uid") and float(match.get("confidence", 0.0)) >= 0.25:
+                existing_uid = str(match["person_uid"])
+                LOG.info(
+                    "Enrollment of %r matches existing person %s (%.2f) — merging samples",
+                    name, match.get("display_name"), float(match.get("confidence", 0.0)),
+                )
+        except Exception:
+            pass
+        person_uid = existing_uid or await self.identity.create(
+            name.strip(), consent=True, relationship=relationship
+        )
         for index, vector in enumerate(vectors):
             await self.identity.add_embedding(person_uid, vector, capture_context=f"kendra_camera_sample_{index + 1}")
         try:
