@@ -302,6 +302,16 @@ class VisionService:
             "biometric_storage": "local identity SQLite store",
         }
 
+    def _note_known_person(self, matches: list[dict[str, Any]]) -> None:
+        known = [
+            str(m.get("display_name"))
+            for m in matches
+            if isinstance(m, dict) and m.get("status") == "recognized" and m.get("display_name")
+        ]
+        if known:
+            self._last_known_person_at = time.time()
+            self._last_known_names = known
+
     async def recognize_faces(self, frame: Any, photo_id: str | None = None) -> list[dict[str, Any]]:
         features = await asyncio.to_thread(self.face_embeddings, frame)
         matches: list[dict[str, Any]] = []
@@ -313,6 +323,7 @@ class VisionService:
             except Exception:
                 pass
             matches.append(match)
+        self._note_known_person(matches)
         return matches
 
     async def semantic_description(self, image_path: Path, question: str) -> str:
@@ -446,7 +457,23 @@ class VisionService:
             )
         if method == "recognize_faces":
             frame, path = await asyncio.to_thread(self.capture)
-            return {"photo_id": path.stem, "matches": await self.recognize_faces(frame, path.stem)}
+            matches = await self.recognize_faces(frame, path.stem)
+            # Identity continuity: a face turned away (playing guitar, looking
+            # down) is not a stranger. Report who she last actually
+            # recognized so she keeps knowing who is in the room.
+            try:
+                recent = await self.identity.recent_recognized(
+                    float(self.settings.get("vision.identity_continuity_seconds", 600))
+                )
+            except Exception:
+                recent = []
+            return {
+                "photo_id": path.stem,
+                "matches": matches,
+                "last_known_names": [str(p["display_name"]) for p in recent],
+                "last_known_seconds_ago": recent[0]["seconds_ago"] if recent else None,
+                "people_in_view": await asyncio.to_thread(self.detect_people, frame),
+            }
         raise KeyError(f"Unknown vision method: {method}")
 
     STRUCTURED_LOOK = (
@@ -587,11 +614,36 @@ class VisionService:
             # to a generic comment; enrollment does its own captures and the
             # ritual exits gracefully if no name is heard. The cooldown burns
             # only when the ritual actually starts.
+            # Greeting Jonathan as a stranger is the worst failure she has:
+            # it happened because ONE snapshot missed his face. The bar is
+            # now deliberately high — two dedicated recognition passes must
+            # each see a face and recognize NOBODY, and no known person may
+            # have been recognized in the last few minutes.
+            async def truly_a_stranger() -> bool:
+                if time.time() - getattr(self, "_last_known_person_at", 0.0) < float(
+                    self.settings.get("vision.ambient.known_person_grace_seconds", 300)
+                ):
+                    return False
+                for attempt in range(2):
+                    if attempt:
+                        await asyncio.sleep(2.0)
+                    try:
+                        frame_now, path_now = await asyncio.to_thread(self.capture)
+                        found = await self.recognize_faces(frame_now, path_now.stem)
+                    except Exception:
+                        return False
+                    if not found:
+                        return False  # no face at all: nobody to meet
+                    if any(m.get("status") == "recognized" for m in found):
+                        return False  # she knows this person after all
+                return True
+
             if (
                 not names
                 and bool(self.settings.get("vision.ambient.meet_new_people", True))
                 and time.time() - getattr(self, "_last_meet_at", 0.0)
                 > float(self.settings.get("vision.ambient.meet_cooldown_seconds", 300))
+                and await truly_a_stranger()
             ):
                 try:
                     voice = UnixJsonClient(self.settings.runtime_dir / "voice.sock", timeout=10)

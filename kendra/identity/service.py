@@ -39,6 +39,8 @@ class IdentityService:
                 capture_context=params.get("capture_context"),
             )
             return {"embedding_id": embedding_id}
+        if method == "recent_recognized":
+            return self.store.recent_recognized(float(params.get("within_seconds", 600)))
         if method == "match":
             match = self.store.match(np.asarray(params["vector"], dtype=np.float32))
             return match.as_dict()
@@ -97,6 +99,9 @@ class IdentityClient:
             },
         )
         return int(result["embedding_id"])
+
+    async def recent_recognized(self, within_seconds: float = 600.0) -> list[dict[str, Any]]:
+        return await self.rpc.call("recent_recognized", {"within_seconds": within_seconds})
 
     async def match(self, vector: np.ndarray) -> dict[str, Any]:
         return await self.rpc.call("match", {"vector": np.asarray(vector, dtype=np.float32).tolist()})

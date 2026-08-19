@@ -519,8 +519,18 @@ remembered, researched, or did something unless the context supports it.
         description (16-40s) to read a name that YuNet+SFace produce in
         ~0.3s. Returns (reply, launch_meet) or None to fall back to the
         full sight path (e.g. no face found — maybe turned away)."""
+        continuity: list[str] = []
+        seen_ago: float | None = None
+
+        people_seen = 0
+
         async def one_pass():
+            nonlocal continuity, seen_ago, people_seen
             result = await asyncio.wait_for(self.vision.recognize_faces_now(), timeout=8.0)
+            people_seen = int((result or {}).get("people_in_view") or 0)
+            continuity = [str(n) for n in (result or {}).get("last_known_names") or []]
+            ago = (result or {}).get("last_known_seconds_ago")
+            seen_ago = float(ago) if isinstance(ago, (int, float)) else None
             return [m for m in (result or {}).get("matches", []) if isinstance(m, dict)]
 
         try:
@@ -535,7 +545,22 @@ remembered, researched, or did something unless the context supports it.
                     matches = retry
         except Exception:
             return None
+        grace = float(self.settings.get("vision.identity_continuity_seconds", 600))
+        still_here = bool(continuity and seen_ago is not None and seen_ago <= grace)
         if not matches:
+            # No face in frame — turned away, head down over a guitar. If she
+            # recognized someone moments ago they have not become a stranger;
+            # forgetting mid-session is exactly the amnesia Jonathan hated.
+            if still_here:
+                return (
+                    f"That's {' and '.join(continuity)} — I can't see your face from "
+                    "this angle, but you haven't gone anywhere.",
+                    False,
+                )
+            if people_seen:
+                # Somebody is there but no readable face: answer NOW instead
+                # of paying a 13-28s Moondream describe to say the same thing.
+                return ("Someone's there, but I can't make out a face from here.", False)
             return None
         names = [
             str(m.get("display_name"))
@@ -554,9 +579,12 @@ remembered, researched, or did something unless the context supports it.
                 "let me introduce myself!",
                 True,
             )
+        # Unknown face on BOTH passes already (the retry above). Even so,
+        # never launch the introduction ritual off a single question — say
+        # so plainly and let the ambient stranger gate decide.
         return (
-            "I can see someone, but I don't know them yet — let me introduce myself!",
-            True,
+            "I see someone I don't recognize yet — do you want to introduce us?",
+            False,
         )
 
     async def _look_now(self, user_text: str, observation: dict[str, Any]) -> None:

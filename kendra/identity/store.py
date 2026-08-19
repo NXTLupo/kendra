@@ -189,6 +189,31 @@ class IdentityStore:
             return IdentityMatch(None, None, max(0.0, best_score), "unknown")
         return IdentityMatch(best_uid, best_name, min(1.0, best_score), "recognized")
 
+    def recent_recognized(self, within_seconds: float = 600.0) -> list[dict[str, Any]]:
+        """Who she actually recognized recently — survives restarts.
+
+        In-memory continuity vanished whenever the vision service restarted
+        and she greeted Jonathan as a stranger again. The encounter log is
+        the durable answer to "who is in the room".
+        """
+        rows = self.conn.execute(
+            """SELECT e.person_uid, i.display_name,
+                      (julianday('now') - julianday(e.created_at)) * 86400 AS ago
+               FROM encounters e JOIN identities i ON i.person_uid = e.person_uid
+               WHERE e.recognized = 1 AND ago <= ?
+               ORDER BY e.created_at DESC LIMIT 5""",
+            (float(within_seconds),),
+        ).fetchall()
+        seen: set[str] = set()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            name = str(row["display_name"] or "")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append({"display_name": name, "seconds_ago": round(float(row["ago"]), 1)})
+        return out
+
     def record_encounter(
         self,
         match: IdentityMatch,
