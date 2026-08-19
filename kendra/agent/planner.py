@@ -29,6 +29,10 @@ class AgentRuntime:
         self.llm = LlamaCppClient(settings)
         self.brain = BrainClient(settings)
         self.body = UnixJsonClient(settings.socket_path("body"), timeout=10)
+        # Walking a few feet takes longer than a status call: 23 gait cycles
+        # at 0.4s each, plus reflex rest pauses. Navigation gets its own
+        # patient client so a real walk is never cut off as a timeout.
+        self.body_motion = UnixJsonClient(settings.socket_path("body"), timeout=90)
         self.vision = VisionClient(settings)
         self.max_tool_steps = int(settings.get("agent.max_tool_steps", 8))
         self.max_movement_calls = int(settings.get("agent.max_movement_calls", 3))
@@ -537,7 +541,7 @@ remembered, researched, or did something unless the context supports it.
         said = announce(intent)
         try:
             result = await asyncio.wait_for(
-                self.body.call("navigate", {"intent": intent.as_dict()}), timeout=45.0
+                self.body_motion.call("navigate", {"intent": intent.as_dict()}), timeout=80.0
             )
         except TimeoutError:
             return (f"{said} ...I had to stop partway.", intent.as_dict())

@@ -10,3 +10,21 @@
 - interaction: voice-first (text chat disabled); turn timings stored as metadata and displayed by the desktop app only.
 - body: simulation driver today (Webots profile available); RaspClaws-Metal is the physical target; all motion reflex-gated and fail-closed behind hardware gates.
 - target hardware: Raspberry Pi 5 16GB + NVMe + RTC + active cooler; full transplant procedure in docs/TRANSPLANT_GUIDE.md.
+
+- locomotion: spoken commands (come here / go away / back up / go to X /
+  turn left|right|around / go forward / stop, distances in feet, inches,
+  metres) parse deterministically to typed MovementIntents — no LLM in the
+  motion loop. She announces before moving and reports on arrival. The gait
+  model (kendra/body/locomotion.py) carries the vendor's real constants:
+  4-phase tripod, 0.4 s per cycle, hip stroke 27.4 deg, knee lift 90 counts;
+  Virtual Kendra walks with that same timing and tracks true pose, so the
+  simulator and the robot agree. Walks run as bounded segments with reflex
+  and front-clearance re-checked between each, pausing when her legs need
+  rest. Distance-per-cycle is ESTIMATED until measured on the real robot.
+- lights: thinking pulses match her thinking tones — cyan breathing while
+  composing, blue chase while researching, green ticks while looking
+  (WS2812, 16 px, GPIO12 on the robot; simulated on the desktop).
+- hardware bridge: hardware/vendor/kendra_adeept_bridge.py speaks the exact
+  RaspClaws signals (PCA9685 0x40 @50 Hz, hip=even/knee=odd, vendor leg map
+  with the reversed right side) and is fail-closed: no gates, no motion;
+  servos clamp to 520; stop() holds torque rather than collapsing her.

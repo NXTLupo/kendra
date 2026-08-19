@@ -166,7 +166,17 @@ class BodyService:
         total_cycles = profile.cycles_for_distance(metres)
         travelled = 0.0
         for segment in segment_plan(total_cycles, per_segment=self.max_steps):
+            # Her legs need a breather every few seconds of continuous gait
+            # (reflex rest policy). A long walk should PAUSE and continue,
+            # not abort — "go forward four feet" is one intention, not six.
+            waited = 0.0
+            while self._reflex().rest_required and waited < 8.0:
+                await asyncio.sleep(0.5)
+                waited += 0.5
             state = self._reflex()
+            if state.rest_required:
+                return {"ok": False, "mode": mode, "travelled_m": round(travelled, 3),
+                        "blocked": "my legs needed a longer rest than I expected"}
             if state.stop_required:
                 return {"ok": False, "mode": mode, "travelled_m": round(travelled, 3),
                         "blocked": "my safety layer stopped me"}
