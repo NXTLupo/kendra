@@ -10,13 +10,20 @@ from ..ipc import UnixJsonClient, UnixJsonServer
 from .fetch import SafeFetcher
 from .kiwix import KiwixClient
 from .searxng import SearXNGClient
+from .websearch import DuckDuckGoLiteClient
 
 
 class ResearchService:
     def __init__(self, settings: Settings):
         self.settings = settings
         timeout = float(settings.get("research.request_timeout_seconds", 12))
-        self.search = SearXNGClient(str(settings.require("research.searxng_url")), timeout)
+        # Native search is PRIMARY: no Docker on any body (the robot carries
+        # none), one pooled HTTPS request, measured ~0.85s vs SearXNG's 2-6s.
+        # SearXNG remains an optional aggregator when its URL is configured
+        # and the container happens to be up.
+        self.web = DuckDuckGoLiteClient(timeout=min(timeout, 6.0))
+        searxng_url = settings.get("research.searxng_url")
+        self.search = SearXNGClient(str(searxng_url), timeout) if searxng_url else None
         self.kiwix = KiwixClient(
             str(settings.require("research.kiwix_url")),
             str(settings.require("research.kiwix_book")),
@@ -52,7 +59,16 @@ class ResearchService:
         per_source_chars = int(self.settings.get("research.per_source_chars", 2500))
         query = self._clean_query(query)
         category = "news" if re.search(r"\b(news|headline|headlines)\b", query, re.I) else None
-        results = await self.search.search(query, max_results, category=category)
+        try:
+            results = await self.web.search(query, max_results, category=category)
+        except Exception:
+            results = []
+        if not results and self.search is not None:
+            # Optional aggregator fallback — only when the container exists.
+            try:
+                results = await self.search.search(query, max_results, category=category)
+            except Exception:
+                results = []
 
         # Snippets-first (edge search-context discipline): search snippets are
         # already clean, high-density text. A small model answers most factual
