@@ -331,6 +331,27 @@ class VoiceService:
             if user_text.strip().lower() in {"stop", "kendra stop", "stop kendra"}:
                 await self._spoken_stop("spoken secondary stop")
                 return {"heard": user_text, "response": "Stopped.", "affect": "alert", "end_conversation": True}
+            # Speaker-correction reflex: "I'm not Jonathan, I'm Steph" means
+            # a new person is talking to her — greet and enroll them NOW,
+            # with the name they just gave. Pure voice+face path, Pi-native.
+            correction = re.search(
+                r"(?:it'?s|this is|i'?m|i am) not jonathan\W*(?:it'?s|this is|i'?m|i am|my name is)?\s*([A-Za-z][a-z]+)?"
+                r"|not jonathan\W+(?:i'?m|i am|it'?s|this is|my name is)\s+([A-Za-z][a-z]+)",
+                lowered,
+            )
+            if correction:
+                given = next((g for g in correction.groups() if g), None)
+                name = _extract_name(given.title()) if given else None
+                await self._speak_with_barge_in(
+                    f"Oh! I'm so sorry — it's lovely to meet you{', ' + name if name else ''}!",
+                    "delighted",
+                )
+                task = asyncio.create_task(
+                    self._meet_person(known_name=name),
+                    name="kendra-meet-correction",
+                )
+                task.add_done_callback(lambda _t: None)
+                return {"heard": user_text, "response": "meeting a new person"}
             # Mic checks are phatic — the alive answer is an instant one.
             # Sent to the LLM, Gemma answers with device diagnostics ("my
             # internal microphones are active") no matter how it's steered.
@@ -464,16 +485,19 @@ class VoiceService:
                 self._manual_capture_active.clear()
                 self._wake_cancel.clear()
 
-    async def _meet_person(self, noticed: str = "") -> dict[str, Any]:
+    async def _meet_person(self, noticed: str = "", known_name: str | None = None) -> dict[str, Any]:
         """Her reflex when an unfamiliar face appears: walk over (the vision
         service already did), introduce herself, learn the name, celebrate,
         and remember the person everywhere — identity, brain, second brain."""
-        await self._speak_with_barge_in(
-            "Oh, hi! I don't think we've met yet — I'm Kendra. What's your name?",
-            "delighted",
-        )
-        heard = await self._capture_transcript(14.0)
-        name = _extract_name(heard)
+        if known_name:
+            heard, name = known_name, known_name
+        else:
+            await self._speak_with_barge_in(
+                "Oh, hi! I don't think we've met yet — I'm Kendra. What's your name?",
+                "delighted",
+            )
+            heard = await self._capture_transcript(14.0)
+            name = _extract_name(heard)
         if not name:
             await self._speak_with_barge_in(
                 "No worries — it's lovely to see you anyway!", "warm"

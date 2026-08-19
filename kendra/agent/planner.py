@@ -161,6 +161,25 @@ class AgentRuntime:
                     for p in visual.get("recognized_people", []) or []
                     if isinstance(p, dict)
                 ]
+                known = [
+                    q["display_name"]
+                    for q in observation["recognized_people"]
+                    if q.get("status") == "recognized" and q.get("display_name")
+                ]
+                unknown_count = sum(
+                    1 for q in observation["recognized_people"] if q.get("status") != "recognized"
+                )
+                if unknown_count or observation["people_in_view"] > len(known):
+                    # Kendra assumed every voice was Jonathan and confidently
+                    # misaddressed his wife. When an unfamiliar face is
+                    # present, the speaker's identity is an open question.
+                    observation["speaker_note"] = (
+                        f"IMPORTANT: {unknown_count or 'an'} unfamiliar person is present"
+                        + (f" along with {', '.join(known)}" if known else "")
+                        + ". The person speaking may NOT be Jonathan — do not address"
+                        " the speaker as Jonathan unless certain; it is warm and right"
+                        " to ask who you have the pleasure of talking to."
+                    )
                 observation["perch"] = visual.get("perch")
             except Exception as exc:
                 observation.setdefault("notes", []).append(
@@ -469,7 +488,7 @@ remembered, researched, or did something unless the context supports it.
 
     def _scene_note(self, observation: dict[str, Any]) -> list[dict[str, Any]]:
         keys = (
-            "visual_scene", "visual_scene_error", "people_in_view",
+            "visual_scene", "visual_scene_error", "people_in_view", "speaker_note",
             "people_count_rule", "recognized_people_names",
         )
         scene = {key: observation[key] for key in keys if observation.get(key) is not None}
