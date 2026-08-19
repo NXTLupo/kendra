@@ -154,6 +154,18 @@ class SpokenDiagnostics:
         def describe_service(name: str, sense: str):
             def inner(payload):
                 ok = bool(payload.get("ok", True))
+                # Self-detected deafness: the day her VAD threshold pinned at
+                # the ceiling, she seemed fine on every health check while
+                # hearing nothing. A threshold near the cap IS a hearing
+                # problem, and she should be the one to say so.
+                threshold = float(payload.get("vad_threshold") or 0.0)
+                if ok and name == "voice" and threshold >= 540.0:
+                    return (
+                        "warn", "minor",
+                        "My hearing is set very insensitive right now — if I seem "
+                        "deaf, ask me to run a diagnostic and I'll recalibrate.",
+                        payload,
+                    )
                 return (
                     "pass" if ok else "fail",
                     "info" if ok else "attention",

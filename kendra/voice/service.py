@@ -748,6 +748,8 @@ class VoiceService:
         if method == "health":
             return {
                 "ok": True,
+                "vad_threshold": float(getattr(self.audio.vad, "threshold_rms", 0.0)),
+                "heard_speech_recently": bool(getattr(self.audio, "last_capture_speech", False)),
                 "asr_provider": self.asr.provider_name,
                 "asr_model_arch": self.asr.model_arch,
                 "asr_ready": self.asr.available()[0],
