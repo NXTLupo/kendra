@@ -6,7 +6,15 @@ SERVER="third_party/llama.cpp/build/bin/llama-server"
 SOURCE_MODEL="models/qwen3-1.7b/Qwen3-1.7B-Q8_0.gguf"   # pinned distribution artifact
 # Gemma 4 E2B: brain AND eyes in one model (mmproj below). Qwen3-1.7B and
 # Moondream stay on disk for one-line rollback via KENDRA_LLM_MODEL.
-MODEL="${KENDRA_LLM_MODEL:-models/qwen3-kendra-v1/qwen3-1.7b.Q4_K_M.gguf}"
+# Base + scaled LoRA (not the merged model): full-strength personality
+# training measurably damaged reasoning (3-1+2 guitars = "five"); llama.cpp
+# applies the adapter at partial strength — warmth kept, reasoning restored.
+# Tune with KENDRA_LORA_SCALE; identical flags on the Pi units.
+MODEL="${KENDRA_LLM_MODEL:-models/qwen3-1.7b/Qwen3-1.7B-Q4_K_M.unsloth.gguf}"
+LORA="${KENDRA_LORA:-models/qwen3-kendra-v1/kendra-voice-lora-v1.gguf}"
+LORA_SCALE="${KENDRA_LORA_SCALE:-0.6}"
+LORA_ARGS=""
+[ -f "$LORA" ] && [ "$LORA_SCALE" != "0" ] && LORA_ARGS="--lora-scaled $LORA:$LORA_SCALE"
 MMPROJ="models/gemma4-e2b/mmproj-gemma-4-E2B-it-Q8_0.gguf"
 if [ ! -x "$SERVER" ]; then
   echo "Missing llama-server: $SERVER. Run scripts/bootstrap_intel_macos.sh first." >&2
@@ -52,7 +60,7 @@ mkdir -p "$ROOT/runtime/slots"
 # --mlock pins the weights in RAM: without it, a half hour of desktop use
 # paged her brain to swap and the first turn after idle took 117 s at
 # 5.5 s/token while pages faulted back in. Same flag on the Pi units.
-exec "$SERVER" -m "$MODEL" $VISION_ARGS --host 127.0.0.1 --port 17800 -c 12288 -np 2 \
+exec "$SERVER" -m "$MODEL" $VISION_ARGS $LORA_ARGS --host 127.0.0.1 --port 17800 -c 12288 -np 2 \
   --slots --slot-save-path "$ROOT/runtime/slots/" \
   --mlock \
   --threads "$CPU_THREADS" --reasoning auto --reasoning-budget 128 --cache-reuse 256 \
