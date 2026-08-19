@@ -443,6 +443,17 @@ class VisionService:
         if not bool(self.settings.get("vision.ambient.enabled", True)):
             return False
         now = time.time()
+        # Never burn Moondream cycles mid-conversation: an ambient describe
+        # overlapping a live turn halved prefill throughput (measured 49.7s
+        # for a simple chat reply). Her idle gaze waits for actual idleness.
+        try:
+            recent = await self.brain.rpc.call(
+                "recent_turns", {"limit": 1, "max_age_seconds": 90}
+            )
+            if recent:
+                return False
+        except Exception:
+            pass
         if not getattr(self, "_motion_pending", False):
             return False
         if now - getattr(self, "_last_ambient_at", 0.0) < float(

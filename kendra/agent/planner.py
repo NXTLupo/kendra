@@ -461,7 +461,8 @@ remembered, researched, or did something unless the context supports it.
                 "surface it; NEVER invent specifics, names, numbers, or headlines. You "
                 "ALREADY searched — lead with the findings and DELIVER THEM COMPLETELY. "
                 "Jonathan asked for a report, so report every result; never respond with "
-                "only a question about what interests him:\n"
+                "only a question about what interests him. Speak in plain flowing "
+                "sentences — NO numbered lists, NO markdown, NO asterisks:\n"
                 + json.dumps(compact, ensure_ascii=False)
             ),
         }]
@@ -866,6 +867,7 @@ remembered, researched, or did something unless the context supports it.
         r"|\b(?:running|operating) (?:on|at) (?:the )?(?:local network|optimal|full capacity)"
         r"|\binternal microphones?\b|\bsystems? (?:are|is) (?:active|online|operational)\b"
         r"|\bsound waves\b|\baudio input\b"
+        r"|\bI will (?:process|provide|retrieve|fetch|now (?:get|find))\b"
         # Internal metrics spoken aloud: "confidence of 1.0", "95% confidence"
         r"|\bconfidence (?:of |level |score )?\d|\b\d+(?:\.\d+)?\s?%?\s?confidence\b",
         re.I,
@@ -1590,7 +1592,8 @@ remembered, researched, or did something unless the context supports it.
             # post-look prefill pays only for the scene note and user words.
             memory, _, _ = await asyncio.gather(
                 self.brain.context(
-                    self._memory_query(user_text, observation), exclude_kinds=["episode"]
+                    self._memory_query(user_text, observation),
+                    exclude_kinds=["episode", "observation"],
                 ),
                 self._look_now(user_text, observation),
                 self.prewarm_conversation(),
@@ -1632,8 +1635,12 @@ remembered, researched, or did something unless the context supports it.
                     result["meet_person"] = True
                 return result
         else:
+            # Observations excluded from plain chat: fresh sight memories made
+            # her narrate Jonathan's lunch in every reply. Sight and recall
+            # paths still retrieve them.
             memory = await self.brain.context(
-                self._memory_query(user_text, observation), exclude_kinds=["episode"]
+                self._memory_query(user_text, observation),
+                exclude_kinds=["episode", "observation"],
             )
         if allowed_tools == {"recall"}:
             # Pure memory question by voice: search the brain directly and

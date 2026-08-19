@@ -57,9 +57,17 @@ class DuckDuckGoLiteClient:
         )
 
     async def search(self, query: str, limit: int = 8, category: str | None = None) -> list[SearchResult]:
-        # DDG lite has no news vertical; freshness-shaped queries get a
-        # plain-language nudge instead, which its ranker honors well.
-        q = f"{query} latest news" if category == "news" and "news" not in query.lower() else query
+        if category == "news":
+            # General web search for "news headlines" returns aggregator
+            # HOMEPAGES ("Google News — discover the latest...") whose titles
+            # contain zero actual headlines — she then recites the junk.
+            # Google News RSS returns real article titles: plain XML, no
+            # key, one fast GET, identical on the Pi.
+            try:
+                return await self._news_rss(query, limit)
+            except Exception:
+                pass  # fall through to general web search
+        q = query
         response = await self._client.post(LITE_URL, data={"q": q})
         response.raise_for_status()
         page = response.text
@@ -81,6 +89,29 @@ class DuckDuckGoLiteClient:
                     snippet=snippets[index] if index < len(snippets) else "",
                 )
             )
+        return results
+
+    _RSS_ITEM = re.compile(r"<item>.*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>.*?<link>(.*?)</link>", re.S)
+
+    async def _news_rss(self, query: str, limit: int) -> list[SearchResult]:
+        topic_words = [w for w in re.findall(r"[a-z0-9]+", query.casefold())
+                       if w not in {"news", "headlines", "headline", "top", "today", "todays",
+                                    "the", "for", "latest", "current", "me", "read"}]
+        if topic_words:
+            url = "https://news.google.com/rss/search?q=" + "+".join(topic_words) + "&hl=en-US&gl=US&ceid=US:en"
+        else:
+            url = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
+        response = await self._client.get(url)
+        response.raise_for_status()
+        results = []
+        for match in self._RSS_ITEM.finditer(response.text):
+            title = _clean(match.group(1))
+            if not title:
+                continue
+            results.append(SearchResult(title=title, url=match.group(2).strip(),
+                                        snippet=title, engine="google-news-rss"))
+            if len(results) >= limit:
+                break
         return results
 
     async def aclose(self) -> None:
