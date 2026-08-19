@@ -28,7 +28,13 @@ if [ ! -f "$MODEL" ]; then
   echo "Generating runtime Q4_K_M from the pinned Q8_0 (one time, ~40s)..." >&2
   "$QUANTIZE" --allow-requantize "$SOURCE_MODEL" "$MODEL" Q4_K_M >&2
 fi
-CPU_THREADS="$(sysctl -n hw.logicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+# Physical cores minus one: taking every logical core oversubscribed the
+# box whenever Gemma and Moondream overlapped (Moondream fell to 1.3
+# tok/s), but minus-two cut prefill ~30% — and prefill dominates every
+# turn. Overlap avoidance lives in the yield gates (ambient vision defers
+# to conversation, consolidation waits for a quiet gap), not here.
+CPU_PHYS="$(sysctl -n hw.physicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+CPU_THREADS=$(( CPU_PHYS - 1 )); [ "$CPU_THREADS" -lt 3 ] && CPU_THREADS=3
 # --cache-reuse lets llama.cpp reuse the KV cache for an unchanged prompt
 # prefix. Kendra's charter and style exemplars are byte-identical every turn,
 # so this removes most of the measured 5.7s time-to-first-token.

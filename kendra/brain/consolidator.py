@@ -329,7 +329,9 @@ RETRIEVED SOURCES:
         opinion or feeling — that page is how her emotional growth stays
         visible across sessions and hardware.
         """
-        entries, cursor = sb.pending(limit=40)
+        # Batch of 20, not 40: a 40-entry batch built a ~3,800-token prefill
+        # that held the tool slot for 87 s and strangled live turns.
+        entries, cursor = sb.pending(limit=20)
         if len(entries) < 4:
             return {"reason": "too_few_raw_entries", "pending": len(entries)}
         listing = "\n".join(

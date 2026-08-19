@@ -426,6 +426,16 @@ class VisionService:
         ):
             # Someone is actively using her eyes or voice; stay out of the way.
             return False
+        # A live conversation outranks curiosity, always: an ambient describe
+        # holds Moondream's only slot for 20+ seconds and steals the CPU
+        # Gemma needs, so Jonathan's "what do you see" queued behind her own
+        # idle glances. Motion stays pending — she looks once the talk ends.
+        try:
+            voice = UnixJsonClient(self.settings.runtime_dir / "voice.sock", timeout=3)
+            if bool((await voice.call("busy")).get("busy")):
+                return False
+        except Exception:
+            pass
         self._motion_pending = False
         self._last_ambient_at = now
         try:

@@ -105,6 +105,21 @@ class AgentRuntime:
             selected.add("look")
         if AgentRuntime._SIGHT_INTENT.search(text):
             selected.add("observe")
+        if "observe" in selected and "research" in selected:
+            # Sight trumps generic temporal markers: "what do you see RIGHT
+            # NOW" selected research too, missed the sight bypass, and paid
+            # 60 s of cold planner rounds. Research survives only if an
+            # explicit research word matched, not just now-ness.
+            temporal = (
+                " right now", " as of today", " as of now", " current ", " latest ",
+                " today's ", " this week", " this month", " this year", " these days",
+                " nowadays", " recently ", " newest ", " happening ", " state of the art",
+            )
+            explicit = tuple(
+                p for p in keyword_groups["research"] if p not in temporal
+            )
+            if not any(phrase in text for phrase in explicit):
+                selected.discard("research")
         if selected.intersection({"walk", "turn", "pose", "look"}):
             selected.add("stop")
         return [schema for schema in schemas if str(schema.get("name")) in selected]
@@ -705,7 +720,17 @@ remembered, researched, or did something unless the context supports it.
         halving generation speed exactly when Jonathan was waiting.
         """
         deadline = asyncio.get_running_loop().time() + max_wait
-        while self._active_turns > 0 and asyncio.get_running_loop().time() < deadline:
+        # "Idle" means a QUIET GAP, not merely between turns: consolidation
+        # fired 1 s after each reply, which in back-to-back conversation
+        # always overlapped the next answer — both Gemma streams shared the
+        # cores and every reply crawled. recent_turns already carries the
+        # exchange instantly, so distillation can safely wait for a lull.
+        quiet = float(self.settings.get("brain.consolidation_quiet_seconds", 25.0))
+        while asyncio.get_running_loop().time() < deadline:
+            if self._active_turns == 0 and (
+                time.time() - getattr(self, "_last_turn_finished", 0.0) >= quiet
+            ):
+                return
             await asyncio.sleep(1.0)
 
     _CAPABILITY_TALK = re.compile(
@@ -932,6 +957,7 @@ remembered, researched, or did something unless the context supports it.
             return await self._turn_inner(user_text, session_id=session_id, source=source, autonomous=autonomous)
         finally:
             self._active_turns -= 1
+            self._last_turn_finished = time.time()
 
     async def _turn_inner(
         self,
@@ -951,10 +977,16 @@ remembered, researched, or did something unless the context supports it.
                 autonomous=autonomous,
             )
 
+        _stage0 = time.monotonic()
         capabilities, observation = await self._body_context()
+        _stage1 = time.monotonic()
         memory = await self.brain.context(
             self._memory_query(user_text, observation), exclude_kinds=["episode"]
         )
+        _timings = getattr(self, "_turn_timings", None)
+        if _timings is not None:
+            _timings["body_ctx_s"] = round(_stage1 - _stage0, 1)
+            _timings["retrieve_s"] = round(time.monotonic() - _stage1, 1)
         registry = ToolRegistry(self.settings, capabilities)
         tool_schemas = self._relevant_tool_schemas(user_text, registry.schemas())
         allowed_tools = {str(schema["name"]) for schema in tool_schemas}
@@ -1019,6 +1051,7 @@ remembered, researched, or did something unless the context supports it.
             # decision left for the planner. Answer directly on the prewarmed
             # conversation prefix — one streamable LLM call instead of two
             # over a cold 2,500-token planner prompt.
+            _answer_started = time.monotonic()
             final_text = (
                 await self.llm.chat(
                     [
@@ -1033,6 +1066,9 @@ remembered, researched, or did something unless the context supports it.
                 id_slot=self.CONVERSATION_SLOT,
                 )
             ).strip() or "My eyes did not give me anything useful just now."
+            if _timings is not None:
+                _timings["answer_s"] = round(time.monotonic() - _answer_started, 1)
+            _dedup_started = time.monotonic()
             retry_messages = [
                 {"role": "system", "content": self._conversation_prompt()},
                 {
@@ -1051,6 +1087,8 @@ remembered, researched, or did something unless the context supports it.
                 id_slot=self.CONVERSATION_SLOT,
                 ),
             )
+            if _timings is not None:
+                _timings["dedup_s"] = round(time.monotonic() - _dedup_started, 1)
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, autonomous=autonomous
             )
@@ -1202,6 +1240,7 @@ remembered, researched, or did something unless the context supports it.
             )
         finally:
             self._active_turns -= 1
+            self._last_turn_finished = time.time()
 
     async def _stream_voice_turn_inner(
         self,

@@ -148,13 +148,18 @@ brain:
     idle_minutes: 30
     min_interval_seconds: 21600
     check_interval_seconds: 900
+  # Consolidation waits for this many quiet seconds after the last turn so
+  # its LLM call never shares cores with a live reply mid-conversation.
+  consolidation_quiet_seconds: 25
   # Karpathy-pattern second brain: immutable raw experience log compiled by
   # her own idle agent into a markdown wiki, governed by MANIFEST.md. Plain
   # files — the directory transplants to the Pi's NVMe untouched.
   second_brain:
     dir: ./data/second_brain
     compile_min_entries: 8
-    compile_idle_minutes: 5
+    # 15 quiet minutes, not 5: a compile firing between conversational
+    # exchanges shares cores with live replies and everything crawls.
+    compile_idle_minutes: 15
   backup_dir: ./exports/brain-backups
   jsonl_export_dir: ./exports/brain-jsonl
   import_dir: ./exports/brain-imports

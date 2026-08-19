@@ -430,6 +430,15 @@ class VoiceService:
                 return {"ok": False, "reason": "conversation_active"}
             await self._speak_with_barge_in(text, str(params.get("affect", "warm")))
             return {"ok": True}
+        if method == "busy":
+            # Is a conversation live right now? Ambient vision asks before
+            # spending 20+ seconds of CPU on a describe: Moondream and Gemma
+            # contending for cores was the "her sight takes forever" bug.
+            return {
+                "busy": self._capture_lock.locked()
+                or self._manual_capture_active.is_set()
+                or time.time() < getattr(self, "_speaking_until", 0.0)
+            }
         if method == "listen_once":
             return await self.one_turn()
         if method == "desktop_capture_begin":
