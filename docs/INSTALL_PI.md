@@ -105,6 +105,24 @@ ls -l models/piper/en_US-amy-medium/en_US-amy-medium.onnx
 ls -d models/vosk/vosk-model-small-en-us-0.15
 ```
 
+### Optional voice organs (ST Micro benchmark round, all CPU/ONNX — Pi-clean)
+
+- **Kokoro TTS** (humanlike voice, MOS 4.02 vs Piper 2.85; measured RTF ~1.0
+  on the Intel iMac under load, expect worse on Pi — qualify on the bench
+  before adopting): `pip install kokoro-onnx`, then
+  `scripts/fetch_local_models.py --kokoro`, then set
+  `voice.tts.provider: kokoro_onnx`. CPU only; never route to a GPU delegate.
+- **Moonshine Base ASR** (RAM relief: ~250 MB resident vs Parakeet's ~700 MB,
+  WER 0.051 vs 0.026): `scripts/fetch_local_models.py --moonshine`, then set
+  `voice.asr.provider: moonshine_onnx`. Self-contained onnxruntime loader —
+  no extra pip packages. Use only if the 16 GB budget tightens.
+- **LFM2-8B-A1B brain candidate** (1B-active MoE): fetch with
+  `scripts/fetch_local_models.py --lfm2` and A/B via
+  `KENDRA_LLM_MODEL=models/lfm2-8b-a1b/LFM2-8B-A1B-Q4_K_M.gguf` on the LLM
+  unit. Adds ~2.2 GB over Gemma (mind ≈ 9.7 GB resident — still inside
+  16 GB with zram). Do not adopt for the planner until its tool syntax is
+  adapted: LFMs emit Pythonic calls, not JSON (37.5% vs 90% format success).
+
 `kendra doctor` verifies that the selected ASR engine can actually load, not
 merely that its files exist.
 

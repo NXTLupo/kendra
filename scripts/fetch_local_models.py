@@ -47,6 +47,43 @@ ASSETS = {
         ROOT / "models/qwen3-4b/Qwen3-4B-Q4_K_M.gguf",
         "7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5",
     ),
+    "llm_lfm2": Asset(
+        "LFM2-8B-A1B Q4_K_M (brain A/B candidate: 1B-active MoE, hybrid conv+GQA; "
+        "ST Micro benchmark pick — see docs/EDGE_PIPELINE_BENCHMARK_ANALYSIS.md)",
+        "https://huggingface.co/LiquidAI/LFM2-8B-A1B-GGUF/resolve/main/LFM2-8B-A1B-Q4_K_M.gguf?download=true",
+        ROOT / "models/lfm2-8b-a1b/LFM2-8B-A1B-Q4_K_M.gguf",
+        "d2185b22630fc68043dac7182f12e86e5ad14990229a90b6c9ad3f4421ddaf82",
+    ),
+    "kokoro_model": Asset(
+        "Kokoro-82M ONNX (humanlike TTS option, MOS 4.02; CPU only — never iGPU)",
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx",
+        ROOT / "models/kokoro/kokoro-v1.0.onnx",
+        "7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5",
+    ),
+    "kokoro_voices": Asset(
+        "Kokoro voice bank v1.0",
+        "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin",
+        ROOT / "models/kokoro/voices-v1.0.bin",
+        "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+    ),
+    "moonshine_encoder": Asset(
+        "Moonshine Base ONNX encoder (Pi RAM-relief ASR fallback, ~250MB resident)",
+        "https://huggingface.co/moonshine-ai/moonshine/resolve/main/onnx/merged/base/float/encoder_model.onnx?download=true",
+        ROOT / "models/moonshine/base/encoder_model.onnx",
+        "153e128e7abd64a74ee47f2c3f585c3171c4d46cbb368b032827934c4e01e779",
+    ),
+    "moonshine_decoder": Asset(
+        "Moonshine Base ONNX merged decoder",
+        "https://huggingface.co/moonshine-ai/moonshine/resolve/main/onnx/merged/base/float/decoder_model_merged.onnx?download=true",
+        ROOT / "models/moonshine/base/decoder_model_merged.onnx",
+        "58778763ca8438963190244d6b26572bdca2cedec56a4b91e828f3f2d69ef3c5",
+    ),
+    "moonshine_tokenizer": Asset(
+        "Moonshine tokenizer",
+        "https://huggingface.co/moonshine-ai/moonshine/resolve/main/onnx/merged/base/float/tokenizer.json?download=true",
+        ROOT / "models/moonshine/base/tokenizer.json",
+        None,
+    ),
     "vlm": Asset(
         "Moondream2 text model f16 (Pi/iMac parity eyes; quantize locally to Q4_K_M)",
         "https://huggingface.co/ggml-org/moondream2-20250414-GGUF/resolve/main/moondream2-text-model-f16_ct-vicuna.gguf?download=true",
@@ -199,6 +236,9 @@ def main() -> int:
     parser.add_argument("--voice", action="store_true")
     parser.add_argument("--vision", action="store_true")
     parser.add_argument("--embeddings", action="store_true", help="Semantic memory embeddings (MiniLM ONNX)")
+    parser.add_argument("--lfm2", action="store_true", help="LFM2-8B-A1B brain A/B candidate (5.0 GB)")
+    parser.add_argument("--kokoro", action="store_true", help="Kokoro humanlike TTS option (~350 MB)")
+    parser.add_argument("--moonshine", action="store_true", help="Moonshine Base ASR fallback (~250 MB)")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
 
@@ -217,8 +257,14 @@ def main() -> int:
         names += ["yunet", "sface"]
     if args.embeddings:
         names += ["embeddings_qwen3", "embeddings_qwen3_tokenizer", "embeddings_qwen3_config", "embeddings_model", "embeddings_tokenizer"]
+    if args.lfm2:
+        names.append("llm_lfm2")
+    if args.kokoro:
+        names += ["kokoro_model", "kokoro_voices"]
+    if args.moonshine:
+        names += ["moonshine_encoder", "moonshine_decoder", "moonshine_tokenizer"]
     if not names:
-        parser.error("Choose --core, --llm, --deep-llm, --vlm, --voice, or --vision")
+        parser.error("Choose --core, --llm, --deep-llm, --vlm, --voice, --vision, --lfm2, --kokoro, or --moonshine")
 
     seen: set[str] = set()
     for name in names:

@@ -167,3 +167,121 @@ class PiperTTS:
         with wave.open(str(output), "wb") as wav:
             voice.synthesize_wav(speakable(text), wav, syn_config=config)
         return output
+
+
+class KokoroTTS:
+    """Kokoro-82M via ONNX — her humanlike-voice option.
+
+    ST Micro's 85-listener study (docs/EDGE_PIPELINE_BENCHMARK_ANALYSIS.md)
+    rated Kokoro MOS 4.024 versus Piper's 2.847, at CPU RTF 0.255 — real-time
+    with margin on the iMac, borderline on the Pi. Strictly CPU: the same
+    study measured iGPU offload degrading Kokoro to RTF 1.330. Piper remains
+    the default; switch with voice.tts.provider: kokoro_onnx. Same interface,
+    same phrase-streamed playback, same onnxruntime wheels on both targets.
+    """
+
+    def __init__(self, settings: Settings):
+        self.settings = settings
+        self.model = resolve_path(
+            settings.get("voice.tts.kokoro_model", "./models/kokoro/kokoro-v1.0.onnx"),
+            settings.root,
+        )
+        self.voices = resolve_path(
+            settings.get("voice.tts.kokoro_voices", "./models/kokoro/voices-v1.0.bin"),
+            settings.root,
+        )
+        self.voice = str(settings.get("voice.tts.kokoro_voice", "af_heart"))
+        self.default_affect = str(settings.get("voice.tts.default_affect", "warm"))
+        self._engine: Any | None = None
+        self._load_lock = threading.Lock()
+        self._speak_lock = asyncio.Lock()
+        self._stop_event = threading.Event()
+
+    def _load(self):
+        if self._engine is not None:
+            return self._engine
+        if not self.model.exists() or not self.voices.exists():
+            raise FileNotFoundError(
+                f"Kokoro model files not found: {self.model} / {self.voices} "
+                "(run scripts/fetch_local_models.py --kokoro)"
+            )
+        try:
+            from kokoro_onnx import Kokoro
+        except ImportError as exc:
+            raise RuntimeError("Install kokoro-onnx: pip install kokoro-onnx") from exc
+        with self._load_lock:
+            if self._engine is None:
+                self._engine = Kokoro(str(self.model), str(self.voices))
+        return self._engine
+
+    def _profile(self, affect: str | None) -> AffectProfile:
+        return AFFECTS.get(str(affect or self.default_affect).lower(), AFFECTS["neutral"])
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        try:
+            import sounddevice as sd
+
+            sd.stop()
+        except Exception:
+            pass
+
+    def _create(self, text: str, affect: str | None):
+        engine = self._load()
+        profile = self._profile(affect)
+        # Kokoro has no VITS-style noise knobs; affect maps to pace (the
+        # inverse of Piper's length_scale) and playback gain.
+        samples, sample_rate = engine.create(
+            text, voice=self.voice, speed=1.0 / profile.length_scale, lang="en-us"
+        )
+        samples = np.clip(samples * profile.volume, -1.0, 1.0)
+        return (samples * 32767.0).astype(np.int16), sample_rate
+
+    def _speak_blocking(self, text: str, affect: str | None) -> None:
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            raise RuntimeError("Install the voice extra: pip install -e '.[voice]'") from exc
+        audio, sample_rate = self._create(text, affect)
+        self._stop_event.clear()
+        stream = sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype="int16", blocksize=0)
+        stream.start()
+        try:
+            # Chunked writes so a stop request lands mid-sentence, not after.
+            step = sample_rate // 4
+            for start in range(0, audio.shape[0], step):
+                if self._stop_event.is_set():
+                    break
+                stream.write(audio[start : start + step].tobytes())
+        finally:
+            stream.stop()
+            stream.close()
+
+    async def speak(self, text: str, affect: str | None = None) -> None:
+        value = speakable(text)
+        if not value:
+            return
+        async with self._speak_lock:
+            await asyncio.to_thread(self._speak_blocking, value, affect)
+
+    async def synthesize(self, text: str, output: Path, affect: str | None = None) -> Path:
+        import wave
+
+        audio, sample_rate = await asyncio.to_thread(self._create, speakable(text), affect)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(output), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(sample_rate)
+            wav.writeframes(audio.tobytes())
+        return output
+
+
+def create_tts(settings: Settings) -> PiperTTS | KokoroTTS:
+    """Explicit provider choice, like ASR: no silent engine swaps."""
+    provider = str(settings.get("voice.tts.provider", "piper")).lower()
+    if provider == "kokoro_onnx":
+        return KokoroTTS(settings)
+    if provider == "piper":
+        return PiperTTS(settings)
+    raise ValueError(f"Unknown voice.tts.provider: {provider!r}. Use 'piper' or 'kokoro_onnx'.")

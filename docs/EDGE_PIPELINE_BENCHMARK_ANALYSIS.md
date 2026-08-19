@@ -24,6 +24,18 @@ queries on the constrained tier. Kendra's equivalents: ASR 0.3 s +
 first-phrase TTFT ~1-2 s + Piper ~0.1 s. Our floor is the LLM TTFT (prefill),
 which is exactly where slot persistence and prewarm already point.
 
+## Implementation status (branch `research-upgrades`, 2026-08-19)
+
+All three levers below are now IMPLEMENTED as switchable options — pinned
+models fetched, providers wired, round-trip tested on the iMac (Kokoro spoke
+a sentence; Moonshine transcribed it back correctly). Measured on the loaded
+6-core iMac: Kokoro RTF 1.035 (the paper's 0.255 was an idle 22-thread Core
+Ultra — expect Pi to be slower still; qualify on the bench), Moonshine RTF
+0.449 cold including session load. Defaults are unchanged: Piper voice,
+Parakeet ears, Gemma brain. Switches: `voice.tts.provider: kokoro_onnx`,
+`voice.asr.provider: moonshine_onnx`, `KENDRA_LLM_MODEL=models/lfm2-8b-a1b/…`.
+LFM2 A/B numbers: see the table appended at the bottom of this file.
+
 ## New levers we have NOT employed (ranked)
 
 1. **LFM2 (Liquid) as brain candidate — the one genuinely new architecture.**
@@ -71,3 +83,21 @@ which is exactly where slot persistence and prewarm already point.
   (and there, our choices already match their winners).
 - **Whisper large variants on CPU**: RTF >1.2, 98 °C, 52 J/s. Already rejected
   in our earlier ASR round; the paper confirms with 1000-run rigor.
+
+## LFM2-8B-A1B A/B — measured 2026-08-19 (loaded iMac, llama-bench, 4 threads)
+
+| Model | Size | Params | pp256 tok/s | tg64 tok/s |
+|---|---:|---:|---:|---:|
+| LFM2-8B-A1B Q4_K_M | 4.70 GiB | 8.34 B | 62.6 ± 16.2 | 12.5 ± 2.3 |
+| Gemma 4 E2B Q4_0 | 2.63 GiB | 4.63 B | 71.4 ± 2.8 | 13.3 ± 0.7 |
+
+**Same speed, ~2x the knowledge capacity.** Register probe (charter-style
+system prompt, "what did you think of that guitar riff?"): *"Oh wow,
+Jonathan, that riff was so cool! It had this smooth, bouncy energy that made
+me want to tap my claws along."* — warm, second-person, embodiment-aware,
+no diagnostics tic. A genuinely promising brain upgrade.
+
+Adoption gate (unchanged): the planner's JSON tool calls must be re-verified
+or adapted (LFMs: 37.5% JSON vs 90% Pythonic format success), and the Pi
+mind budget grows ~2.1 GB to ≈9.7 GB resident — inside 16 GB with zram.
+A/B live anytime with `KENDRA_LLM_MODEL=models/lfm2-8b-a1b/LFM2-8B-A1B-Q4_K_M.gguf`.

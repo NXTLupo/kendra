@@ -202,6 +202,138 @@ class ParakeetOnnxASR(WhisperServerASR):
         return await super().transcribe(wav_path)
 
 
+class MoonshineOnnxASR(WhisperServerASR):
+    """Moonshine Base via plain onnxruntime — the Pi RAM-relief option.
+
+    ST Micro's 1000-run benchmark (docs/EDGE_PIPELINE_BENCHMARK_ANALYSIS.md):
+    variable-length attention, no 30s zero-padding, RTF 0.064 and 1.4 J/s on
+    CPU with WER 0.051. Roughly 250 MB resident versus Parakeet's ~700 MB —
+    the documented fallback if the Pi's memory budget tightens. Parakeet
+    stays the default (better WER).
+
+    Implemented self-contained (encoder + merged decoder, greedy) because
+    the upstream ``useful-moonshine-onnx`` package drags librosa→numba→
+    llvmlite, which fails to build on Intel macOS and is hostile on Pi
+    aarch64. Moonshine consumes raw 16 kHz float audio — no mel frontend —
+    so onnxruntime + tokenizers (already shipped for Parakeet and the
+    embedding brain) are the only runtime needs. Same wheels both targets.
+    Any failure falls back to whisper-server → whisper-cli, inherited.
+    """
+
+    provider_name = "moonshine_onnx"
+
+    def __init__(self, settings: Settings):
+        super().__init__(settings)
+        self.moonshine_dir = resolve_path(
+            settings.get("voice.asr.moonshine_dir", "./models/moonshine/base"),
+            settings.root,
+        )
+        self._sessions: Any | None = None
+        self._session_lock = threading.Lock()
+        self._broken = False
+
+    def available(self) -> tuple[bool, str]:
+        if (self.moonshine_dir / "encoder_model.onnx").is_file():
+            return True, "ok (moonshine with whisper fallback)"
+        return super().available()
+
+    def _load_sessions(self) -> Any:
+        with self._session_lock:
+            if self._sessions is None:
+                import onnxruntime as ort
+                from tokenizers import Tokenizer
+
+                opts = ort.SessionOptions()
+                encoder = ort.InferenceSession(
+                    str(self.moonshine_dir / "encoder_model.onnx"),
+                    opts,
+                    providers=["CPUExecutionProvider"],
+                )
+                decoder = ort.InferenceSession(
+                    str(self.moonshine_dir / "decoder_model_merged.onnx"),
+                    opts,
+                    providers=["CPUExecutionProvider"],
+                )
+                tokenizer = Tokenizer.from_file(str(self.moonshine_dir / "tokenizer.json"))
+                self._sessions = (encoder, decoder, tokenizer)
+            return self._sessions
+
+    def _recognize(self, wav_path: Path) -> str:
+        import numpy as np
+
+        encoder, decoder, tokenizer = self._load_sessions()
+        with wave.open(str(wav_path), "rb") as wav:
+            rate = wav.getframerate()
+            frames = wav.readframes(wav.getnframes())
+        audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+        if rate != 16000:
+            # Linear resample; capture is already 16 kHz on both machines.
+            duration = audio.shape[0] / float(rate)
+            target = int(duration * 16000)
+            audio = np.interp(
+                np.linspace(0.0, audio.shape[0] - 1, target), np.arange(audio.shape[0]), audio
+            ).astype(np.float32)
+        seconds = audio.shape[0] / 16000.0
+        (hidden,) = encoder.run(None, {"input_values": audio[None, :]})
+
+        # Merged-decoder greedy loop (HF optimum export): first pass computes
+        # the cross-attention KV, later passes reuse it via use_cache_branch.
+        head_shapes: dict[str, tuple[int, int]] = {}
+        for inp in decoder.get_inputs():
+            if inp.name.startswith("past_key_values."):
+                shape = inp.shape  # [batch, heads, seq, head_dim]
+                head_shapes[inp.name] = (int(shape[1]), int(shape[3]))
+        past = {
+            name: np.zeros((1, heads, 0, dim), dtype=np.float32)
+            for name, (heads, dim) in head_shapes.items()
+        }
+        tokens = [1]  # <s>
+        max_tokens = max(8, int(seconds * 6.5))  # upstream length heuristic
+        use_cache = np.array([False])
+        input_ids = np.array([tokens], dtype=np.int64)
+        for _ in range(max_tokens):
+            feeds: dict[str, Any] = {
+                "input_ids": input_ids,
+                "encoder_hidden_states": hidden,
+                "use_cache_branch": use_cache,
+                **past,
+            }
+            outputs = decoder.run(None, feeds)
+            names = [out.name for out in decoder.get_outputs()]
+            by_name = dict(zip(names, outputs, strict=True))
+            next_token = int(by_name["logits"][0, -1].argmax())
+            tokens.append(next_token)
+            if next_token == 2:  # </s>
+                break
+            for name in past:
+                present = "present." + name.removeprefix("past_key_values.")
+                fresh = by_name.get(present)
+                # Cross-attention KV is only produced on the first branch;
+                # keep the first-pass values thereafter.
+                if fresh is not None and (".decoder." in name or not use_cache[0]):
+                    past[name] = fresh
+            use_cache = np.array([True])
+            input_ids = np.array([[next_token]], dtype=np.int64)
+        return tokenizer.decode(tokens, skip_special_tokens=True).strip()
+
+    async def transcribe(self, wav_path: Path) -> str:
+        if not wav_path.is_file():
+            raise FileNotFoundError(wav_path)
+        if _empty_wav(wav_path):
+            return ""
+        if not self._broken and (self.moonshine_dir / "encoder_model.onnx").is_file():
+            try:
+                text = await asyncio.to_thread(self._recognize, wav_path)
+                return re.sub(r"\s+", " ", text).strip()
+            except Exception as exc:
+                self._broken = True
+                LOG.warning(
+                    "Moonshine ONNX failed (%s: %s); falling back to whisper for this session",
+                    type(exc).__name__, exc,
+                )
+        return await super().transcribe(wav_path)
+
+
 class MoonshineASR:
     """Streaming Moonshine ASR.
 
@@ -287,9 +419,11 @@ def build_asr(settings: Settings):
         return WhisperServerASR(settings)
     if provider in {"whisper_cpp", "whisper", "whisper.cpp"}:
         return WhisperCppASR(settings)
+    if provider == "moonshine_onnx":
+        return MoonshineOnnxASR(settings)
     if provider == "moonshine":
         return MoonshineASR(settings)
     raise ValueError(
         f"Unknown voice.asr.provider: {provider!r}. "
-        "Use 'parakeet_onnx', 'whisper_server', 'whisper_cpp', or 'moonshine'."
+        "Use 'parakeet_onnx', 'whisper_server', 'whisper_cpp', 'moonshine_onnx', or 'moonshine'."
     )

@@ -18,7 +18,7 @@ from .acks import AckPlayer, ThinkingSounds
 from .asr import build_asr
 from .audio import LocalAudioCapture
 from .streaming import PhraseAccumulator
-from .tts import PiperTTS
+from .tts import create_tts
 from .wake import DisabledWakeWord, build_wake_provider
 
 LOG = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ class VoiceService:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.asr = build_asr(settings)
-        self.tts = PiperTTS(settings)
+        self.tts = create_tts(settings)
         self.acks = AckPlayer(settings, self.tts)
         self.thinking_sounds = ThinkingSounds(settings)
         self.audio = LocalAudioCapture(settings)

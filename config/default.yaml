@@ -236,9 +236,23 @@ voice:
     threads: 4
     model_arch: small-streaming
     model_path: ./models/moonshine/download.moonshine.ai/model/small-streaming-en/quantized
+    # moonshine_onnx: the Pi RAM-relief fallback (~250MB resident vs
+    # Parakeet's ~700MB; WER 0.051 vs 0.026). Self-contained onnxruntime
+    # loader — fetch with scripts/fetch_local_models.py --moonshine.
+    moonshine_dir: ./models/moonshine/base
   tts:
+    # piper (default): 20M VITS, the most energy-efficient TTS in the ST
+    # Micro study (RTF 0.034, 1.24 J/s) — the Pi's safe choice.
+    # kokoro_onnx: 82M StyleTTS2, humanlike (MOS 4.02 vs Piper 2.85) at CPU
+    # RTF 0.255 — real-time on the iMac, borderline on Pi. CPU ONLY: the
+    # same study measured iGPU offload degrading Kokoro to RTF 1.33.
+    # Fetch with scripts/fetch_local_models.py --kokoro.
+    provider: piper
     piper_python: python3
     model: ./models/piper/en_US-amy-medium/en_US-amy-medium.onnx
+    kokoro_model: ./models/kokoro/kokoro-v1.0.onnx
+    kokoro_voices: ./models/kokoro/voices-v1.0.bin
+    kokoro_voice: af_heart
     player: sounddevice
     chunk_chars: 180
     default_affect: warm
