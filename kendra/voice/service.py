@@ -181,6 +181,22 @@ class VoiceService:
         LOG.info("Pre-rendered %d phrases (%d cached)", made, len(self._phrase_cache))
         return made
 
+    def _leds(self, **fields: object) -> None:
+        """Fire-and-forget light state — her body must never wait on LEDs.
+
+        On the robot these are the two WS2812 modules; on the desktop the
+        driver is a no-op, so the same calls run on both bodies.
+        """
+        async def send() -> None:
+            try:
+                client = UnixJsonClient(self.settings.runtime_dir / "leds.sock", timeout=3)
+                await client.call("system", fields)
+            except Exception:
+                LOG.debug("LED update unavailable", exc_info=True)
+
+        task = asyncio.create_task(send(), name="kendra-leds")
+        task.add_done_callback(lambda _t: None)
+
     def _play_cached(self, text: str, affect: str) -> bool:
         path = getattr(self, "_phrase_cache", {}).get((text.strip(), affect))
         if path is None or not path.exists():
@@ -212,6 +228,7 @@ class VoiceService:
         """Speak locally while listening for Kendra's secondary spoken stop."""
 
         self.thinking_sounds.stop()
+        self._leds(thinking=False)
         # Self-echo ledger: everything she says is remembered briefly so her
         # own voice, picked up by her own microphone, can never become a
         # "user" turn. (Her ambient comment was once transcribed as Jonathan
@@ -398,6 +415,7 @@ class VoiceService:
             if self.audio.last_capture_speech:
                 self.acks.play_random()
                 self.thinking_sounds.start()
+                self._leds(thinking=True, thinking_mode="think")
             user_text = await self.asr.transcribe(wav)
             if not user_text or _is_noise_caption(user_text):
                 return {"heard": user_text, "response": ""}
@@ -406,7 +424,9 @@ class VoiceService:
                 [str(self.settings.get("voice.wake.phrase", "kendra")).casefold()],
             )
             # Distinct tones per kind of work: he hears what she is doing.
-            self.thinking_sounds.set_mode(_turn_mode(user_text))
+            mode = _turn_mode(user_text)
+            self.thinking_sounds.set_mode(mode)
+            self._leds(thinking=True, thinking_mode=mode)
             import difflib
 
             for spoken_at, spoken in getattr(self, "_spoken_ledger", []):

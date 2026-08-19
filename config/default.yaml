@@ -117,6 +117,9 @@ llm:
   # Conversational turns are capped much lower: a spoken reply longer than
   # ~2 sentences is a monologue, and every extra token is dead air.
   conversation_max_tokens: 160
+  # Quizzes, lists, stories: a two-sentence budget silently truncated them
+  # into an offer. Creation tasks get room to actually deliver.
+  content_task_max_tokens: 320
 brain:
   socket: brain.sock
   embedding:

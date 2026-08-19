@@ -1,28 +1,67 @@
 from __future__ import annotations
 
+import math
 import time
 from typing import Any
 
 from .base import BodyDriver
+from .locomotion import DEFAULT_PROFILE
 
 
 class SimulationBodyDriver(BodyDriver):
+    """Virtual Kendra's body: the same gait timing and displacement her
+    hardware will have, so a walk *takes as long* and *carries as far* in
+    the app as it will on the floor.
+
+    One gait cycle = 4 tripod phases (Adeept move.py), so `steps` are gait
+    cycles, not footfalls, and the driver actually sleeps the cycle time.
+    """
+
     def __init__(self):
         self.state = "ready"
         self.last_action: dict[str, Any] | None = None
+        self.x = 0.0
+        self.y = 0.0
+        self.heading_deg = 0.0
+        self.profile = DEFAULT_PROFILE
 
     def _record(self, action: str, **kwargs: Any) -> dict[str, Any]:
         self.state = action
         self.last_action = {"action": action, **kwargs, "timestamp": time.time()}
-        time.sleep(0.02)
         self.state = "ready"
-        return {"ok": True, "simulated": True, **self.last_action}
+        return {
+            "ok": True,
+            "simulated": True,
+            **self.last_action,
+            "pose": {"x_m": round(self.x, 3), "y_m": round(self.y, 3),
+                     "heading_deg": round(self.heading_deg % 360, 1)},
+        }
 
     def walk(self, direction: str, steps: int, speed: float) -> dict[str, Any]:
-        return self._record("walk", direction=direction, steps=steps, speed=speed)
+        cycles = max(1, int(steps))
+        time.sleep(min(4.0, cycles * self.profile.cycle_seconds))
+        travel = self.profile.distance_for_cycles(cycles)
+        if direction in {"forward", "backward"}:
+            sign = 1.0 if direction == "forward" else -1.0
+            radians = math.radians(self.heading_deg)
+            self.x += sign * travel * math.cos(radians)
+            self.y += sign * travel * math.sin(radians)
+        else:
+            # Vendor 'left'/'right' walking is a turn-in-place tripod stroke.
+            self.heading_deg += (-1.0 if direction == "left" else 1.0) * (
+                cycles * self.profile.degrees_per_cycle
+            )
+            travel = 0.0
+        return self._record(
+            "walk", direction=direction, steps=cycles, speed=speed,
+            travelled_m=round(travel, 3),
+        )
 
     def turn(self, degrees: float, speed: float) -> dict[str, Any]:
-        return self._record("turn", degrees=degrees, speed=speed)
+        cycles = self.profile.cycles_for_angle(degrees)
+        time.sleep(min(4.0, cycles * self.profile.cycle_seconds))
+        self.heading_deg += float(degrees)
+        return self._record("turn", degrees=degrees, speed=speed, cycles=cycles)
 
     def pose(self, name: str) -> dict[str, Any]:
         return self._record("pose", name=name)

@@ -11,6 +11,7 @@ from ..config import Settings
 from ..ipc import UnixJsonServer
 from ..protocol import Observation, ReflexState
 from .base import BodyDriver
+from .locomotion import DEFAULT_PROFILE, segment_plan
 from .raspclaws import RaspClawsDriver
 from .sim import SimulationBodyDriver
 from .webots import WebotsBodyDriver
@@ -126,6 +127,68 @@ class BodyService:
         degrees = min(self.max_turn, max(-self.max_turn, float(degrees)))
         return await self._run_motion(self.driver.turn, degrees, self._clamp_speed(speed))
 
+    async def navigate(self, intent: dict[str, Any]) -> dict[str, Any]:
+        """Execute a typed MovementIntent as bounded, re-checked segments.
+
+        Never one long blind walk: she moves a few gait cycles, re-reads the
+        world (reflex faults, cliff, front distance), and only then
+        continues. That is what makes "go forward about four feet" honest on
+        a robot with no odometry — and it keeps every body call inside the
+        reflex heartbeat window.
+        """
+        mode = str(intent.get("mode", "forward"))
+        profile = DEFAULT_PROFILE
+        speed = 0.25 if str(intent.get("speed")) == "slow" else 0.4
+        if mode == "stop":
+            return await self.driver_stop("navigate stop")
+
+        if mode == "turn":
+            degrees = float(intent.get("angle_deg") or 90.0)
+            done = 0.0
+            remaining = degrees
+            while abs(remaining) > 1.0:
+                chunk = max(-self.max_turn, min(self.max_turn, remaining))
+                await self.turn(chunk, speed)
+                done += chunk
+                remaining -= chunk
+                state = self._reflex()
+                if state.stop_required:
+                    return {"ok": False, "mode": mode, "turned_deg": done,
+                            "blocked": "my safety layer stopped me"}
+            return {"ok": True, "mode": mode, "turned_deg": done}
+
+        direction = {
+            "forward": "forward", "goto": "forward", "approach": "forward",
+            "backward": "backward", "retreat": "backward",
+        }.get(mode, "forward")
+        distance = intent.get("distance_m")
+        metres = float(distance) if distance else profile.distance_for_cycles(4)
+        total_cycles = profile.cycles_for_distance(metres)
+        travelled = 0.0
+        for segment in segment_plan(total_cycles, per_segment=self.max_steps):
+            state = self._reflex()
+            if state.stop_required:
+                return {"ok": False, "mode": mode, "travelled_m": round(travelled, 3),
+                        "blocked": "my safety layer stopped me"}
+            if direction == "forward" and state.front_cm is not None:
+                if state.front_cm < float(self.settings.get("body.min_forward_clearance_cm", 25)):
+                    return {"ok": False, "mode": mode, "travelled_m": round(travelled, 3),
+                            "blocked": "there's something right in front of me"}
+            await self.walk(direction, segment, speed)
+            travelled += profile.distance_for_cycles(segment)
+        return {
+            "ok": True,
+            "mode": mode,
+            "travelled_m": round(travelled, 3),
+            "requested_m": round(metres, 3),
+            "calibrated": profile.calibrated,
+        }
+
+    async def driver_stop(self, reason: str) -> dict[str, Any]:
+        result = await asyncio.to_thread(self.driver.stop)
+        self._write_motion_state(moving=False)
+        return {"ok": True, "stopped": True, "reason": reason, "driver": result}
+
     async def observation(self) -> dict[str, Any]:
         state = self._reflex()
         return Observation(
@@ -159,6 +222,8 @@ class BodyService:
             return self.capabilities
         if method == "observation":
             return await self.observation()
+        if method == "navigate":
+            return await self.navigate(dict(params.get("intent") or {}))
         if method == "walk":
             return await self.walk(str(params["direction"]), int(params.get("steps", 1)), float(params.get("speed", 0.3)))
         if method == "turn":

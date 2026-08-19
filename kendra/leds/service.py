@@ -22,6 +22,9 @@ class SystemLightState:
     low_battery: bool = False
     offline: bool = False
     thinking: bool = False
+    # Which kind of work she is doing, so her lights say the same thing her
+    # tones do: think / research / sight.
+    thinking_mode: str = "think"
     expression: ExpressiveState = "neutral"
 
 
@@ -39,7 +42,16 @@ def resolve_light(state: SystemLightState) -> dict[str, str]:
     if state.offline:
         return {"pattern": "tick", "semantic": "blue", "reason": "offline"}
     if state.thinking:
-        return {"pattern": "breathe", "semantic": "cyan", "reason": "thinking"}
+        # One visual language with her thinking tones: warm cyan breathing
+        # while she composes, slow deep-blue chase while she reaches out to
+        # the network, quick green ticks while she is looking.
+        modes = {
+            "think": {"pattern": "breathe", "semantic": "cyan"},
+            "research": {"pattern": "chase", "semantic": "blue"},
+            "sight": {"pattern": "tick", "semantic": "green"},
+        }
+        chosen = modes.get(state.thinking_mode, modes["think"])
+        return {**chosen, "reason": f"thinking:{state.thinking_mode}"}
     mapping = {
         "warm": {"pattern": "soft", "semantic": "warm"},
         "concern": {"pattern": "slow_pulse", "semantic": "amber"},
@@ -98,13 +110,17 @@ class LedService:
         if method == "system":
             allowed = {
                 "reflex_fault", "critical_battery", "updating", "charging",
-                "low_battery", "offline", "thinking",
+                "low_battery", "offline", "thinking", "thinking_mode",
             }
             unknown = set(params) - allowed
             if unknown:
                 raise ValueError(f"Unknown system light fields: {sorted(unknown)}")
             for key, value in params.items():
-                setattr(self.state, key, bool(value))
+                if key == "thinking_mode":
+                    mode = str(value)
+                    self.state.thinking_mode = mode if mode in {"think", "research", "sight"} else "think"
+                else:
+                    setattr(self.state, key, bool(value))
             return await self._apply()
         raise KeyError(f"Unknown LED method: {method}")
 

@@ -17,6 +17,7 @@ from ..ipc import UnixJsonClient
 from ..llm import LlamaCppClient
 from ..protocol import PlannerAction
 from ..vision.service import VisionClient
+from .movement import announce, arrival, parse_movement
 from .tools import ToolRegistry
 
 LOG = logging.getLogger(__name__)
@@ -513,6 +514,47 @@ remembered, researched, or did something unless the context supports it.
             }
         ]
 
+    async def _movement_turn(self, user_text: str) -> tuple[str, dict] | None:
+        """Deterministic locomotion: parse, announce, move, report.
+
+        The model is not in this loop. "Stop" reaches her legs without
+        waiting on a single token, and every other move is spoken BEFORE it
+        happens so Jonathan is never surprised by a robot that lurches
+        first and explains afterwards.
+        """
+        intent = parse_movement(user_text)
+        if intent is None:
+            return None
+        timings = getattr(self, "_turn_timings", None)
+        if timings is not None:
+            timings["kind"] = f"move:{intent.mode}"
+        if intent.mode == "stop":
+            try:
+                await self.body.call("stop", {"reason": "spoken stop"})
+            except Exception:
+                pass
+            return ("Stopping.", intent.as_dict())
+        said = announce(intent)
+        try:
+            result = await asyncio.wait_for(
+                self.body.call("navigate", {"intent": intent.as_dict()}), timeout=45.0
+            )
+        except TimeoutError:
+            return (f"{said} ...I had to stop partway.", intent.as_dict())
+        except Exception as exc:
+            reason = str(exc)
+            if "rest" in reason.lower():
+                return (f"{said} ...whoops, my legs need a breather first — ask me again in a few seconds.", intent.as_dict())
+            if "eflex" in reason:
+                return (f"{said} ...actually, I can't move safely right now.", intent.as_dict())
+            if "hardware gate" in reason.lower() or "fail" in reason.lower():
+                return ("I can't walk yet — my body isn't finished. Once we build it, I'll be all over the place!", intent.as_dict())
+            return (f"{said} ...my legs aren't responding right now.", intent.as_dict())
+        blocked = result.get("blocked") if isinstance(result, dict) else None
+        moved = float(result.get("travelled_m") or 0.0) if isinstance(result, dict) else 0.0
+        tail = arrival(intent, moved_m=moved or None, blocked=blocked)
+        return (f"{said} {tail}".strip(), {**intent.as_dict(), "result": result})
+
     async def _fast_who_answer(self, user_text: str) -> tuple[str, bool] | None:
         """Identity questions on the millisecond path: capture + face
         recognizer only. A who-question was paying a full Moondream scene
@@ -778,6 +820,41 @@ remembered, researched, or did something unless the context supports it.
             },
         ]
 
+    def _content_note(self, content_task: bool) -> list[dict[str, object]]:
+        """Asked to CREATE something, she must hand it over, not offer it.
+
+        Measured: "Make me a quiz on heavy metal bands" produced "I can run
+        a quick quiz. Ready?" — an offer, with the answer never arriving.
+        """
+        if not content_task:
+            return []
+        return [{
+            "role": "system",
+            "content": (
+                "Jonathan asked you to CREATE something. Produce it NOW, in full, "
+                "in your own spoken voice — never reply with an offer, a readiness "
+                "question, or 'would you like me to'. Keep it speakable: no "
+                "markdown, no numbered formatting; if it is a quiz, ask three "
+                "questions in flowing speech and say you have more if he wants them."
+            ),
+        }]
+
+    def _answer_budget(self, content_task: bool, default_key: str = "llm.conversation_max_tokens") -> int:
+        base = int(self.settings.get(default_key, 160))
+        if content_task:
+            # A quiz or a story cannot fit in a two-sentence budget.
+            return int(self.settings.get("llm.content_task_max_tokens", 320))
+        return base
+
+    _CONTENT_TASK = re.compile(
+        r"\b(?:make|write|create|give|tell|come up with|think of|build)\s+"
+        r"(?:me\s+|us\s+)?(?:a|an|some|three|five|\d+)?\s*"
+        r"(?:quiz|test|questions?|list|story|poem|joke|riddle|game|challenge|"
+        r"summary|plan|recipe|idea|ideas|tips?|facts?|examples?)\b"
+        r"|\bquiz me\b|\btest me\b|\bplay a game\b",
+        re.I,
+    )
+
     _RESEARCH_PROMISE = re.compile(
         r"\b(?:I'?ll|I will|let me|I'?m going to)\s+(?:look\s+(?:that|it|this)?\s*up"
         r"|search|check|find out|research)",
@@ -966,7 +1043,15 @@ remembered, researched, or did something unless the context supports it.
         r"|\bconfidence (?:of |level |score )?\d|\b\d+(?:\.\d+)?\s?%?\s?confidence\b",
         re.I,
     )
-    _FILLER_OPENER = re.compile(r"^(?:I see\.|I understand\.|I know\.|Sure\.)\s+", re.I)
+    _FILLER_OPENER = re.compile(
+        r"^(?:I see\.|I understand\.|I know\.|Sure\.)\s+"
+        # Offer preamble before delivered content: "I can make one for you.
+        # Let's start with this: ..." — the content is there, the throat-
+        # clearing is not wanted.
+        r"|^(?:I can |I'?ll |Let me )(?:make|write|create|put together|come up with|do)"
+        r"[^.!?]*[.!?]\s+(?=\S)",
+        re.I,
+    )
 
     async def _act_guard(self, final_text: str, regenerate) -> str:
         """She already acted; the reply must not offer to act.
@@ -1107,6 +1192,7 @@ remembered, researched, or did something unless the context supports it.
         source: str,
         autonomous: bool,
     ) -> dict[str, Any]:
+        content_task = bool(self._CONTENT_TASK.search(user_text))
         memory = await self.brain.context(
             user_text,
             limit=int(self.settings.get("brain.live_retrieval_limit", 3)),
@@ -1122,9 +1208,10 @@ remembered, researched, or did something unless the context supports it.
                     *self._style_exemplars(),
                     *await self._history_messages(user_text),
                     *self._memory_message(memory),
+                    *self._content_note(content_task),
                     {"role": "user", "content": user_text},
                 ],
-                max_tokens=int(self.settings.get("llm.conversation_max_tokens", 140))
+                max_tokens=self._answer_budget(content_task)
                 + (int(self.settings.get("llm.thinking_budget", 512)) if thinking else 0),
                 thinking=thinking,
                 id_slot=self.CONVERSATION_SLOT,
@@ -1139,6 +1226,7 @@ remembered, researched, or did something unless the context supports it.
                 },
                 *await self._history_messages(user_text),
                 *self._memory_message(memory),
+                *self._content_note(content_task),
                 {"role": "user", "content": user_text},
             ]
             final_text = await self._dedup_reply(
@@ -1190,6 +1278,14 @@ remembered, researched, or did something unless the context supports it.
         autonomous: bool,
     ) -> dict[str, Any]:
         await self.brain.begin_session(session_id, context=source)
+        movement = await self._movement_turn(user_text)
+        if movement is not None:
+            spoken, meta = movement
+            result = await self._remember_plain_turn(
+                session_id, user_text, spoken, source=source, autonomous=autonomous,
+            )
+            result["movement"] = meta
+            return result
 
         if not self._schemas_for_text(user_text):
             return await self._plain_turn(
@@ -1613,6 +1709,16 @@ remembered, researched, or did something unless the context supports it.
         source: str,
     ) -> dict[str, Any]:
         await self.brain.begin_session(session_id, context=source)
+        movement = await self._movement_turn(user_text)
+        if movement is not None:
+            spoken, meta = movement
+            await on_delta(spoken, "delighted" if "coming over" in spoken else "warm")
+            result = await self._remember_plain_turn(
+                session_id, user_text, spoken, source=source, streamed=True,
+            )
+            result["movement"] = meta
+            return result
+        content_task = bool(self._CONTENT_TASK.search(user_text))
 
         build_note = (
             await self._build_plan_note(user_text) if self._BUILD_QUESTION.search(user_text) else []
@@ -1670,7 +1776,7 @@ remembered, researched, or did something unless the context supports it.
             thinking = self._wants_thinking(user_text)
             async for delta in self.llm.stream_chat(
                 messages,
-                max_tokens=int(self.settings.get("llm.conversation_max_tokens", 140))
+                max_tokens=self._answer_budget(content_task)
                 + (int(self.settings.get("llm.thinking_budget", 512)) if thinking else 0),
                 thinking=thinking,
                 id_slot=self.CONVERSATION_SLOT,
