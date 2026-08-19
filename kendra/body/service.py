@@ -127,7 +127,15 @@ class BodyService:
         degrees = min(self.max_turn, max(-self.max_turn, float(degrees)))
         return await self._run_motion(self.driver.turn, degrees, self._clamp_speed(speed))
 
-    async def navigate(self, intent: dict[str, Any]) -> dict[str, Any]:
+    async def _await_rest(self, limit: float) -> bool:
+        """Wait out the reflex rest window. Returns True if she may move."""
+        waited = 0.0
+        while self._reflex().rest_required and waited < limit:
+            await asyncio.sleep(0.5)
+            waited += 0.5
+        return not self._reflex().rest_required
+
+    async def navigate(self, intent: dict[str, Any], patient: bool = False) -> dict[str, Any]:
         """Execute a typed MovementIntent as bounded, re-checked segments.
 
         Never one long blind walk: she moves a few gait cycles, re-reads the
@@ -142,11 +150,35 @@ class BodyService:
         if mode == "stop":
             return await self.driver_stop("navigate stop")
 
+        if mode == "sidestep":
+            angle = float(intent.get("angle_deg") or 75.0)
+            metres = float(intent.get("distance_m") or 0.25)
+            turned = await self.navigate({"mode": "turn", "angle_deg": angle, "speed": "slow"})
+            forward = {"ok": False, "travelled_m": 0.0, "blocked": turned.get("blocked")}
+            if turned.get("ok"):
+                forward = await self.navigate(
+                    {"mode": "forward", "distance_m": metres, "speed": "slow"}
+                )
+            # Always face back the way she started, even if the walk was cut
+            # short — otherwise a rest pause mid-shuffle leaves her standing
+            # sideways, which reads as a malfunction.
+            restored = await self.navigate(
+                {"mode": "turn", "angle_deg": -float(turned.get("turned_deg") or angle), "speed": "slow"},
+                patient=True,
+            )
+            return {"ok": bool(forward.get("ok")), "mode": mode,
+                    "travelled_m": forward.get("travelled_m", 0.0),
+                    "heading_restored": bool(restored.get("ok")),
+                    "blocked": forward.get("blocked")}
         if mode == "turn":
             degrees = float(intent.get("angle_deg") or 90.0)
             done = 0.0
             remaining = degrees
+            rest_limit = 25.0 if patient else 8.0
             while abs(remaining) > 1.0:
+                if not await self._await_rest(rest_limit):
+                    return {"ok": False, "mode": mode, "turned_deg": done,
+                            "blocked": "my legs needed a longer rest than I expected"}
                 chunk = max(-self.max_turn, min(self.max_turn, remaining))
                 await self.turn(chunk, speed)
                 done += chunk
@@ -173,10 +205,8 @@ class BodyService:
             # Her legs need a breather every few seconds of continuous gait
             # (reflex rest policy). A long walk should PAUSE and continue,
             # not abort — "go forward four feet" is one intention, not six.
-            waited = 0.0
-            while self._reflex().rest_required and waited < 8.0:
-                await asyncio.sleep(0.5)
-                waited += 0.5
+            if not await self._await_rest(25.0 if patient else 8.0):
+                state = self._reflex()
             state = self._reflex()
             if state.rest_required:
                 return {"ok": False, "mode": mode, "travelled_m": round(travelled, 3),

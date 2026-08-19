@@ -518,6 +518,37 @@ remembered, researched, or did something unless the context supports it.
             }
         ]
 
+    _MOVEMENT_CLAIM = re.compile(
+        r"\b(?:I(?:'m| am) (?:walking|moving|coming over|heading over|on my way|crawling)"
+        r"|I (?:just )?(?:walked|moved|came over|crawled|stepped|turned|scooted)"
+        r"|I'?ll (?:walk|move|come|head) over"
+        r"|moving (?:left|right|now)|walking over)\b",
+        re.I,
+    )
+
+    async def _movement_claim_guard(self, final_text: str, moved: bool, regenerate) -> str:
+        """She may never say she moved when her legs never moved.
+
+        Measured failure: "Can you move to the left?" missed the movement
+        parser, the model answered, and she said "I just walked over to
+        where you are sitting" — while standing perfectly still. A claim of
+        motion without a body command is a lie, so it is regenerated once
+        with the truth, and failing that replaced outright.
+        """
+        if moved or not self._MOVEMENT_CLAIM.search(final_text or ""):
+            return final_text
+        LOG.warning("Movement claim without motion: %r", final_text[:80])
+        try:
+            fresh = (await regenerate()).strip()
+        except Exception:
+            fresh = ""
+        if fresh and not self._MOVEMENT_CLAIM.search(fresh):
+            return fresh
+        return (
+            "I didn't actually move just then — say it again as a command "
+            "like 'move to your left' and I'll do it."
+        )
+
     async def _movement_turn(self, user_text: str, on_delta=None) -> tuple[str, dict] | None:
         """Deterministic locomotion: parse, announce, move, report.
 
@@ -1252,6 +1283,26 @@ remembered, researched, or did something unless the context supports it.
             )
         if not final_text:
             final_text = "I'm here."
+        # This path never commands her legs, so any claim of motion in it is
+        # fiction by construction.
+        final_text = await self._movement_claim_guard(
+            final_text,
+            moved=False,
+            regenerate=lambda: self.llm.chat(
+                [
+                    {"role": "system", "content": self._conversation_prompt()},
+                    {"role": "system", "content": (
+                        "You did NOT move and you are not moving. Never claim to walk, "
+                        "move, or come over unless Jonathan gave you a movement command. "
+                        "Answer his message honestly instead."
+                    )},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.8,
+                max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
+                id_slot=self.CONVERSATION_SLOT,
+            ),
+        )
         return await self._remember_plain_turn(
             session_id,
             user_text,

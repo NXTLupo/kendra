@@ -20,7 +20,7 @@ from typing import Literal
 
 from ..body.locomotion import feet_to_metres
 
-Mode = Literal["forward", "backward", "turn", "approach", "retreat", "goto", "stop"]
+Mode = Literal["forward", "backward", "turn", "approach", "retreat", "goto", "sidestep", "stop"]
 
 _NUMBER_WORDS = {
     "a": 1.0, "an": 1.0, "one": 1.0, "two": 2.0, "three": 3.0, "four": 4.0,
@@ -42,6 +42,12 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("turn_around", re.compile(r"\bturn (?:yourself )?around\b|\bspin around\b|\bface (?:the )?other way\b", re.I)),
     ("turn_left", re.compile(r"\bturn (?:to your |to the )?left\b|\bgo left\b|\bswing left\b|\bleft turn\b", re.I)),
     ("turn_right", re.compile(r"\bturn (?:to your |to the )?right\b|\bgo right\b|\bswing right\b|\bright turn\b", re.I)),
+    ("sidestep_left", re.compile(
+        r"\b(?:move|step|scoot|shift|slide|shuffle|shimmy)\s+(?:over\s+)?(?:to\s+)?(?:the\s+|your\s+|my\s+)?left\b"
+        r"|\bmove over to the left\b|\bto your left\b", re.I)),
+    ("sidestep_right", re.compile(
+        r"\b(?:move|step|scoot|shift|slide|shuffle|shimmy)\s+(?:over\s+)?(?:to\s+)?(?:the\s+|your\s+|my\s+)?right\b"
+        r"|\bmove over to the right\b|\bto your right\b", re.I)),
     ("come", re.compile(r"\bcome (?:here|to me|over here|closer|here girl)\b|\bcome on over\b|\bover here\b", re.I)),
     ("away", re.compile(r"\bgo away\b|\bback off\b|\bgive me (?:some )?space\b|\bmove away\b|\bshoo\b", re.I)),
     ("backward", re.compile(r"\b(?:back up|backup|go back(?:wards?)?|move back(?:wards?)?|reverse|scoot back)\b", re.I)),
@@ -114,6 +120,18 @@ def parse_movement(text: str) -> MovementIntent | None:
             return MovementIntent("turn", angle_deg=-(angle or 90.0), raw=stripped)
         if name == "turn_right":
             return MovementIntent("turn", angle_deg=angle or 90.0, raw=stripped)
+        if name in {"sidestep_left", "sidestep_right"}:
+            # The RaspClaws gait has no true strafe: the vendor's only
+            # lateral primitive is turn-in-place. So "move to the left" is
+            # an honest three-part shuffle — face that way, take a couple of
+            # steps, face back — which is what a real hexapod would do.
+            return MovementIntent(
+                "sidestep",
+                distance_m=distance or 0.25,
+                angle_deg=-75.0 if name == "sidestep_left" else 75.0,
+                speed="slow",
+                raw=stripped,
+            )
         if name == "come":
             return MovementIntent(
                 "approach", target="Jonathan", distance_m=distance,
@@ -161,6 +179,9 @@ def announce(intent: MovementIntent) -> str:
         if abs(angle) >= 170:
             return "Turning around."
         return "Turning left." if angle < 0 else "Turning right."
+    if intent.mode == "sidestep":
+        side = "left" if (intent.angle_deg or 0) < 0 else "right"
+        return f"Scooting over to the {side}."
     if intent.mode == "forward":
         return f"Walking forward {distance}." if distance else "Walking forward."
     return "On my way."
