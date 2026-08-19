@@ -811,12 +811,12 @@ remembered, researched, or did something unless the context supports it.
                 # possible echo template; drop it.
                 continue
             if user_text:
-                lines.append(f"Jonathan: {user_text[:200]}")
+                lines.append(f"Jonathan: {user_text[:130]}")
             # users_only: on fact-reporting turns (fresh research in context)
             # her own past answers are pure contamination — one confabulated
             # headline in history outweighs real evidence in front of her.
             if kendra_text and not users_only:
-                lines.append(f"Kendra: {kendra_text[:200]}")
+                lines.append(f"Kendra: {kendra_text[:130]}")
         if not lines:
             return []
         note = (
@@ -1080,6 +1080,8 @@ remembered, researched, or did something unless the context supports it.
         r"|\b(?:running|operating) (?:on|at) (?:the )?(?:local network|optimal|full capacity)"
         r"|\binternal microphones?\b|\bsystems? (?:are|is) (?:active|online|operational)\b"
         r"|\bsound waves\b|\baudio input\b"
+        r"|\boperational cycle\b|\bprocessing data\b|\bawaiting (?:input|instructions?)\b"
+        r"|\bmy (?:systems?|sensors?|circuits?) (?:are|is)\b"
         r"|\bI will (?:process|provide|retrieve|fetch|now (?:get|find))\b"
         r"|\b(?:I'?ll|I will|let me)\s+(?:look|check|search|find)\b"
         # Internal metrics spoken aloud: "confidence of 1.0", "95% confidence"

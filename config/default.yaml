@@ -116,7 +116,7 @@ llm:
   max_tokens: 700
   # Conversational turns are capped much lower: a spoken reply longer than
   # ~2 sentences is a monologue, and every extra token is dead air.
-  conversation_max_tokens: 160
+  conversation_max_tokens: 120
   # Quizzes, lists, stories: a two-sentence budget silently truncated them
   # into an offer. Creation tasks get room to actually deliver.
   content_task_max_tokens: 320
@@ -135,8 +135,8 @@ brain:
     # rollback: provider onnx_minilm + dimensions 384 + all-MiniLM-L6-v2
   retrieval_limit: 12
   context_character_budget: 7000
-  live_retrieval_limit: 3
-  live_context_character_budget: 900
+  live_retrieval_limit: 2
+  live_context_character_budget: 600
   automatic_consolidation: true
   consolidation_min_chars: 24
   # Short delay, and consolidations are queued, never canceled: with the
@@ -341,7 +341,11 @@ agent:
   # Rolling dialogue context: the last N recorded turns (within the age
   # window) are replayed as message history so Kendra can hold an actual
   # conversation instead of answering every utterance cold.
-  history_turns: 10
+  # Measured 2026-08-19: 8-12s of EVERY turn was prefill of the volatile
+  # block (621-709 tokens at ~60 tok/s), and history was most of it. Four
+  # turns of transcript keeps referents ("it", "that one") without making
+  # her re-read a novel before every sentence.
+  history_turns: 4
   history_max_age_seconds: 7200
   max_tool_steps: 8
   max_movement_calls: 3
