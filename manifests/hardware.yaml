@@ -1,0 +1,18 @@
+build_id: kendra-v1
+body: Adeept RaspClaws-Metal
+status: UNVERIFIED
+hard_gates:
+  servo_mapping_verified: false
+  battery_path_verified: false
+  e_stop_verified: false
+  cliff_array_verified: false
+  motion_calibrated: false
+cliff_array:
+  sensor_model: Pololu 38 kHz IR Proximity Sensor #2579
+  count: 4
+  positions: [front-left, front-right, rear-left, rear-right]
+  controller: MCP23017
+notes:
+  - Real motion is deliberately disabled until every hard gate is true.
+  - Record the verified 17-servo/16-channel resolution here before enabling the hardware driver.
+  - Record battery/charging verification evidence before installing production cells.

@@ -1,0 +1,59 @@
+project:
+  mode: simulation
+
+paths:
+  runtime_dir: ./runtime/pc
+  brain_db: ./data/kendra-brain.db
+  identity_db: ./data/kendra-identities.db
+
+body:
+  driver: simulation
+  capabilities:
+    body_name: kendra-digital-twin
+    leg_dof: 18
+    camera_dof: 2
+    has_head_gimbal: true
+    has_imu: true
+    has_cliff_sensors: true
+    cliff_sensor_count: 4
+    has_servo_feedback: true
+    supports_height_control: true
+    supports_overload_telemetry: true
+    has_ultrasonic: true
+    has_battery_voltage: true
+
+reflex:
+  sensors:
+    provider: simulation
+
+vision:
+  camera_provider: opencv
+  camera_index: 0
+  semantic_vlm_url: http://127.0.0.1:8081/v1
+
+voice:
+  # Desktop: no physical motion to emergency-stop, and the per-phrase stop
+  # monitor was opening a fresh CoreAudio input stream for every sentence —
+  # the main source of 'Error opening RawInputStream' wake-loop crashes.
+  # The robot profile keeps this on.
+  barge_in_monitor: false
+  capture:
+    # Preferred mic by name substring. Used when connected; if unplugged,
+    # Kendra auto-probes the remaining inputs instead of going deaf.
+    device: AG06
+  wake:
+    provider: vosk_keyword
+    phrase: kendra
+  stop_wake:
+    provider: vosk_keyword
+    phrase: stop kendra
+
+brain:
+  embedding:
+    provider: hashing
+
+agent:
+  allow_autonomy: false
+
+autonomy:
+  enabled: false

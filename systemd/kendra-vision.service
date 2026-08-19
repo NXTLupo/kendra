@@ -1,0 +1,21 @@
+[Unit]
+Description=Kendra local vision service
+After=local-fs.target kendra-identity.service kendra-brain.service
+Wants=kendra-identity.service kendra-brain.service
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+SupplementaryGroups=video
+EnvironmentFile=-/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStart=/opt/kendra/current/.venv/bin/kendra --config /etc/kendra/production.yaml service vision
+Restart=always
+RestartSec=2
+RuntimeDirectory=kendra
+StateDirectory=kendra
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

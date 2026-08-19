@@ -1,0 +1,17 @@
+{
+  "owner-signal": {
+    "channel": "signal",
+    "account": "+15555550100",
+    "target": "+15555550101"
+  },
+  "owner-email": {
+    "channel": "smtp",
+    "host": "smtp.example.com",
+    "port": "587",
+    "username": "kendra@example.com",
+    "password_file": "/home/kendra/.config/kendra/smtp-password",
+    "from": "kendra@example.com",
+    "target": "owner@example.com",
+    "subject": "Photo from Kendra"
+  }
+}

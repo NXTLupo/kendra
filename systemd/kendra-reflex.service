@@ -1,0 +1,23 @@
+[Unit]
+Description=Kendra independent reflex safety service
+After=local-fs.target
+Before=kendra-body.service kendra-agent.service
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+SupplementaryGroups=i2c gpio
+EnvironmentFile=-/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStart=/opt/kendra/current/.venv/bin/kendra --config /etc/kendra/production.yaml service reflex
+Restart=always
+RestartSec=1
+RuntimeDirectory=kendra
+StateDirectory=kendra
+UMask=0007
+# Memory-pressure policy: senses and speech are sacrificed before safety.
+OOMScoreAdjust=-900
+
+[Install]
+WantedBy=multi-user.target

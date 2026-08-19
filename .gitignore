@@ -1,0 +1,51 @@
+.venv/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.nox/
+.tox/
+build/
+dist/
+.DS_Store
+
+# Local secrets and hardware-specific overrides
+config/local.yaml
+config/hardware.local.yaml
+config/recipients.local.json
+config/*.secret
+*.key
+*.minisign.key
+
+# Runtime state
+runtime/*
+!runtime/.gitkeep
+logs/*
+!logs/.gitkeep
+data/*
+!data/.gitkeep
+photos/*
+!photos/.gitkeep
+outbox/*
+!outbox/.gitkeep
+exports/*
+!exports/.gitkeep
+
+# Large local models / archives
+third_party/
+models/*
+!models/.gitkeep
+*.gguf
+*.onnx
+*.zim
+*.bin
+
+# Local vendor code must be audited and kept separate from this repo
+hardware/vendor/
+searxng/.env
+searxng/data/*
+!searxng/data/.gitkeep

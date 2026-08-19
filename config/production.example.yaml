@@ -1,0 +1,99 @@
+project:
+  mode: hardware
+
+paths:
+  runtime_dir: /run/kendra
+  brain_db: /var/lib/kendra/kendra-brain.db
+  identity_db: /var/lib/kendra/kendra-identities.db
+  photos_dir: /var/lib/kendra/photos
+  outbox_dir: /var/lib/kendra/outbox
+  logs_dir: /var/log/kendra
+  exports_dir: /var/lib/kendra/exports
+
+# Change these only after each physical verification is complete and evidence is
+# committed to the hardware manifest/build state.
+hardware_gates:
+  servo_mapping_verified: false
+  battery_path_verified: false
+  e_stop_verified: false
+  cliff_array_verified: false
+  motion_calibrated: false
+
+body:
+  driver: raspclaws
+  # Populate only with pose names verified against the exact physical kit.
+  allowed_poses: []
+  capabilities:
+    body_name: raspclaws-metal
+    # Fill these only from the verified current Metal wiring map.
+    leg_dof: 0
+    camera_dof: 0
+    has_head_gimbal: false
+    has_imu: true
+    has_cliff_sensors: true
+    cliff_sensor_count: 4
+    has_servo_feedback: false
+    supports_height_control: false
+    supports_overload_telemetry: false
+    has_ultrasonic: true
+    has_battery_voltage: false
+
+reflex:
+  sensors:
+    # The bridge variant fails closed unless verified ultrasonic/battery telemetry
+    # is available alongside the four-sensor cliff array.
+    provider: mcp23017_bridge
+    telemetry_bridge:
+      search_path: /opt/kendra-hardware
+      module: kendra_reflex_bridge
+
+vision:
+  # The robot's camera really is near the floor; the desktop webcam is not.
+  semantic_perspective: >-
+    You are Kendra, a small hexapod robot. Your camera is about 15 cm above
+    the floor and angled upward; interpret scale and occlusion accordingly.
+    Describe only what is actually visible.
+  camera_provider: picamera2
+  semantic_vlm_url: http://127.0.0.1:8081/v1
+  face:
+    yunet_model: /var/lib/kendra/models/vision/face_detection_yunet_2023mar.onnx
+    sface_model: /var/lib/kendra/models/vision/face_recognition_sface_2021dec.onnx
+
+voice:
+  # The robot keeps the spoken-stop monitor during speech: physical motion
+  # demands every interrupt channel.
+  barge_in_monitor: true
+  asr:
+    # whisper.cpp builds from source on aarch64 Linux, so the Pi runs the same
+    # engine and model file as the Intel iMac. Do not switch this to moonshine:
+    # it publishes no Linux aarch64 wheel and cannot load on this machine.
+    provider: whisper_cpp
+    whisper_cli: /opt/kendra/current/third_party/whisper.cpp/build/bin/whisper-cli
+    model: /var/lib/kendra/models/whisper/ggml-small.en.bin
+    threads: 4
+  tts:
+    model: /var/lib/kendra/models/piper/en_US-amy-medium/en_US-amy-medium.onnx
+  wake:
+    provider: vosk_keyword
+    phrase: kendra
+    alternate_phrases: [hi kendra, hey kendra]
+    vosk_model: /var/lib/kendra/models/vosk/vosk-model-small-en-us-0.15
+  stop_wake:
+    provider: vosk_keyword
+    phrase: stop kendra
+    alternate_phrases: [kendra stop, stop]
+    vosk_model: /var/lib/kendra/models/vosk/vosk-model-small-en-us-0.15
+  streaming:
+    enabled: true
+
+brain:
+  embedding:
+    provider: hashing
+  backup_dir: /var/lib/kendra/exports/brain-backups
+  jsonl_export_dir: /var/lib/kendra/exports/brain-jsonl
+
+autonomy:
+  enabled: false
+
+agent:
+  allow_autonomy: false

@@ -1,0 +1,1 @@
+"""Whitelisted photo delivery adapters."""

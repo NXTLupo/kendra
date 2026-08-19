@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kendra-robot"
+version = "0.2.0"
+description = "Offline-first onboard AI companion runtime for Kendra, the Sovereign AI Arachnid"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27,<1",
+  "numpy>=1.26,<3",
+  "pydantic>=2.8,<3",
+  "PyYAML>=6.0,<7",
+  "trafilatura>=1.12,<3",
+]
+
+[project.optional-dependencies]
+brain = ["onnxruntime>=1.17,<2", "tokenizers>=0.15,<1"]
+brain-torch = ["sentence-transformers>=3,<6"]
+hardware = ["smbus2>=0.4.3,<1"]
+vision = ["opencv-contrib-python-headless>=4.10,<5"]
+voice = ["sounddevice>=0.5,<1", "vosk>=0.3.44,<1", "piper-tts>=1.3,<2", "onnx-asr>=0.12,<1"]
+openwakeword = ["openwakeword==0.6.0"]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<1", "ruff>=0.9,<1"]
+all = [
+  "onnxruntime>=1.17,<2",
+  "tokenizers>=0.15,<1",
+  "smbus2>=0.4.3,<1",
+  "opencv-contrib-python-headless>=4.10,<5",
+  "openwakeword==0.6.0",
+  "sounddevice>=0.5,<1",
+  "vosk>=0.3.44,<1",
+  "piper-tts>=1.3,<2",
+  "onnx-asr>=0.12,<1",
+]
+
+[project.scripts]
+kendra = "kendra.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["kendra*"]
+
+[tool.setuptools.package-data]
+"kendra.brain" = ["schema.sql"]
+"kendra.identity" = ["schema.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]

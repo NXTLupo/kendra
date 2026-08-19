@@ -1,0 +1,21 @@
+[Unit]
+Description=Kendra local llama.cpp inference server
+After=local-fs.target
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+EnvironmentFile=/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStartPre=/usr/bin/mkdir -p /var/lib/kendra/slots
+ExecStart=/opt/kendra/current/third_party/llama.cpp/build/bin/llama-server -m ${KENDRA_LLM_MODEL} --host 127.0.0.1 --port 8080 -c 12288 -np 2 --reasoning auto --reasoning-budget 128 --cache-reuse 256 --slots --slot-save-path /var/lib/kendra/slots/ --cors-origins localhost --no-cors-credentials
+Restart=always
+RestartSec=3
+StateDirectory=kendra
+UMask=0007
+# Memory-pressure policy: senses and speech are sacrificed before safety.
+OOMScoreAdjust=300
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,355 @@
+project:
+  # voice_first: text chat is disabled and the desktop app becomes a
+  # read-only window into her mind — interaction happens by voice, exactly
+  # as it will on the robot body. Set to 'mixed' to re-enable typed chat.
+  interaction_mode: voice_first
+  name: Kendra
+  mode: simulation
+  timezone: America/Los_Angeles
+paths:
+  runtime_dir: ./runtime
+  brain_db: ./data/kendra-brain.db
+  charter: ./charter/charter.md
+  photos_dir: ./photos
+  outbox_dir: ./outbox
+  logs_dir: ./logs
+  exports_dir: ./exports
+  identity_db: ./data/kendra-identities.db
+hardware_gates:
+  servo_mapping_verified: false
+  battery_path_verified: false
+  e_stop_verified: false
+  cliff_array_verified: false
+  motion_calibrated: false
+body:
+  driver: simulation
+  socket: body.sock
+  max_steps_per_call: 4
+  max_turn_degrees: 45
+  speed_min: 0.15
+  speed_max: 0.55
+  motion_timeout_seconds: 5.0
+  motion_state_file: motion-state.json
+  allowed_poses: [neutral, alert, rest, stretch]
+  capabilities:
+    body_name: raspclaws-metal
+    leg_dof: 0
+    camera_dof: 0
+    has_head_gimbal: false
+    has_imu: true
+    has_cliff_sensors: true
+    cliff_sensor_count: 4
+    has_servo_feedback: false
+    supports_height_control: false
+    supports_overload_telemetry: false
+    has_ultrasonic: true
+    has_battery_voltage: false
+  raspclaws:
+    bridge_search_path: ./hardware/vendor
+    bridge_module: kendra_adeept_bridge
+  webots:
+    host: 127.0.0.1
+    port: 8765
+    connect_timeout_seconds: 2.0
+reflex:
+  socket: reflex.sock
+  state_file: reflex-state.json
+  heartbeat_max_age_seconds: 0.75
+  poll_interval_seconds: 0.04
+  clear_floor_samples: 5
+  obstacle_hard_stop_cm: 18.0
+  low_battery_voltage: null
+  critical_battery_voltage: null
+  max_continuous_motion_seconds: 8.0
+  minimum_rest_seconds: 4.0
+  sensors:
+    provider: simulation
+    mcp23017:
+      bus: 1
+      address: 32
+      out_bank: A
+      enable_bank: B
+      positions:
+        fl:
+          out_bit: 0
+          enable_bit: 0
+        fr:
+          out_bit: 1
+          enable_bit: 1
+        rl:
+          out_bit: 2
+          enable_bit: 2
+        rr:
+          out_bit: 3
+          enable_bit: 3
+      settle_ms: 3
+      samples_per_sensor: 3
+      floor_votes_required: 2
+llm:
+  base_url: http://127.0.0.1:8080/v1
+  model: qwen3-1.7b-q4_k_m
+  # The interactive model is identical on Intel macOS and Raspberry Pi.
+  # 1.7B replaced 0.6B on 2026-08-17: measured A/B showed 0.6B cannot hold
+  # coherent multi-turn dialogue (docs/QWEN_VOICE_OPTIMIZATION.md).
+  timeout_seconds: 240
+  # Official Qwen3 non-thinking sampling (model card best practices):
+  # temperature 0.7, top_p 0.8, top_k 20, min_p 0. Repetition is mitigated
+  # with presence_penalty alone (card range 0-2); frequency_penalty and heavy
+  # repeat_penalty are off-spec and measurably degraded coherence.
+  temperature: 0.7
+  top_p: 0.8
+  top_k: 20
+  min_p: 0.0
+  # repeat_last_n stays at llama.cpp's default 64 (freshly generated text
+  # only). A 512-token window penalized every token in the prompt — including
+  # names she was asked to RECALL ("Sarah", "Neptune") — which read as amnesia
+  # plus word salad. Anti-parroting is handled by presence_penalty and the
+  # transcript-note history format instead.
+  repeat_penalty: 1.0
+  repeat_last_n: 64
+  presence_penalty: 1.0
+  frequency_penalty: 0.0
+  # Selective thinking (Qwen3 report: budgeted thinking consistently improves
+  # results). Off for ordinary turns; enabled per request for hard questions,
+  # capped server-side by --reasoning-budget.
+  thinking_budget: 128
+  max_tokens: 700
+  # Conversational turns are capped much lower: a spoken reply longer than
+  # ~2 sentences is a monologue, and every extra token is dead air.
+  conversation_max_tokens: 160
+brain:
+  socket: brain.sock
+  embedding:
+    # onnx_minilm = real semantic vectors (all-MiniLM-L6-v2 via onnxruntime,
+    # ~20 ms/encode on CPU, same wheels on Intel macOS and Pi aarch64).
+    # hashing remains the zero-download fallback.
+    # qwen3_onnx: Qwen3-Embedding-0.6B int8 — same 22ms encode as MiniLM,
+    # measurably better cross-phrasing recall on her real corpus. On the Pi
+    # place model_q4.onnx in the same directory to save ~300MB.
+    provider: qwen3_onnx
+    dimensions: 1024
+    model_path: ./models/embeddings/qwen3-embedding-0.6b
+    # rollback: provider onnx_minilm + dimensions 384 + all-MiniLM-L6-v2
+  retrieval_limit: 12
+  context_character_budget: 7000
+  live_retrieval_limit: 3
+  live_context_character_budget: 900
+  automatic_consolidation: true
+  consolidation_min_chars: 24
+  # Short delay, and consolidations are queued, never canceled: with the
+  # old cancel-on-new-turn design an active conversation NEVER extracted
+  # facts, which is indistinguishable from amnesia once history rolls off.
+  consolidation_idle_seconds: 1
+  # Dreaming: idle-time memory review — retire duplicates, distill at most
+  # two first-person insights per pass. Only after 30+ quiet minutes, at
+  # most every 6 hours, one bounded LLM call on the tool slot.
+  dreaming:
+    enabled: true
+    idle_minutes: 30
+    min_interval_seconds: 21600
+    check_interval_seconds: 900
+  backup_dir: ./exports/brain-backups
+  jsonl_export_dir: ./exports/brain-jsonl
+  import_dir: ./exports/brain-imports
+  sync:
+    ssh_host: null
+    ssh_user: kendra
+    ssh_identity_file: null
+    max_bytes: 26214400
+connectivity:
+  enabled: true
+  probe_host: 1.1.1.1
+  probe_port: 443
+  timeout_seconds: 1.0
+research:
+  socket: research.sock
+  searxng_url: http://127.0.0.1:8888
+  kiwix_url: http://127.0.0.1:8090
+  kiwix_book: wikipedia_en_all_nopic
+  max_results: 5
+  max_pages: 2
+  per_source_chars: 3500
+  request_timeout_seconds: 8
+  max_download_bytes: 2500000
+  user_agent: KendraResearch/0.2 (+local personal robot research client)
+vision:
+  # Ambient vision: when the scene changes meaningfully and the system is
+  # quiet, she takes one structured look and remembers it unprompted —
+  # motion-gated (Penguin-VL keyframe principle) so idle CPU stays idle.
+  ambient:
+    enabled: true
+    # Sight-to-locomotion: when her idle gaze notices something, she takes
+    # two slow steps toward it (body service still enforces reflex lock,
+    # movement budgets, and fail-closed hardware gates).
+    curiosity_approach: true
+    motion_threshold: 10.0
+    min_interval_seconds: 180
+    quiet_gap_seconds: 90
+    check_interval_seconds: 30
+  socket: vision.sock
+  camera_provider: opencv
+  camera_index: 0
+  frame_width: 1280
+  frame_height: 720
+  aruco_dictionary: DICT_4X4_50
+  perch_marker_id: 23
+  semantic_vlm_url: null
+  face:
+    yunet_model: ./models/vision/face_detection_yunet_2023mar.onnx
+    sface_model: ./models/vision/face_recognition_sface_2021dec.onnx
+    embeddings_dir: ./data/faces
+    cosine_threshold: 0.363
+voice:
+  asr:
+    # whisper_cpp is the portable default: it builds from source on both
+    # x86_64 macOS and aarch64 Linux, so the Intel iMac and the Raspberry Pi
+    # run the same engine and the same model file.
+    #
+    # moonshine is lower latency but the published wheels ship an arm64-only
+    # libmoonshine.dylib under a universal2 tag and have no Linux aarch64
+    # build, so it loads on neither target machine. Re-qualify it only after
+    # upstream publishes matching binaries.
+    # parakeet_onnx: Parakeet TDT 0.6B v3 int8 — 0.3s per utterance on CPU
+    # (11x faster than whisper small.en, better WER), in-process, Pi parity.
+    # Falls back automatically to whisper_server, then whisper-cli.
+    provider: parakeet_onnx
+    parakeet_dir: ./models/parakeet/parakeet-tdt-0.6b-v3-onnx
+    server_url: http://127.0.0.1:8082
+    server_timeout_seconds: 30
+    whisper_cli: ./third_party/whisper.cpp/build/bin/whisper-cli
+    # small.en: base.en was mishearing whole sentences through a room mic
+    # ("what do you see" -> "I can't read today"), and she answered the
+    # garble earnestly. ~0.5 GB, ~2x slower, dramatically more accurate.
+    model: ./models/whisper/ggml-small.en.bin
+    threads: 4
+    model_arch: small-streaming
+    model_path: ./models/moonshine/download.moonshine.ai/model/small-streaming-en/quantized
+  tts:
+    piper_python: python3
+    model: ./models/piper/en_US-amy-medium/en_US-amy-medium.onnx
+    player: sounddevice
+    chunk_chars: 180
+    default_affect: warm
+  wake:
+    provider: vosk_keyword
+    model_paths: []
+    threshold: 0.55
+    block_samples: 1280
+    phrase: kendra
+    # Natural greetings are kept in the local Vosk grammar so "hi kendra" and
+    # "hey kendra" decode cleanly; matching is substring-based, so the bare
+    # name alone is sufficient to wake her.
+    alternate_phrases:
+    - hi kendra
+    - hey kendra
+    vosk_model: ./models/vosk/vosk-model-small-en-us-0.15
+  stop_wake:
+    provider: vosk_keyword
+    phrase: stop kendra
+    alternate_phrases:
+    - kendra stop
+    - stop
+    threshold: 0.6
+    vosk_model: ./models/vosk/vosk-model-small-en-us-0.15
+  vad:
+    provider: energy
+    threshold_rms: 450
+    # With auto_calibrate the working threshold is 4x the chosen microphone's
+    # measured ambient noise floor (clamped 120-3000); threshold_rms is only
+    # the fallback when calibration is off.
+    auto_calibrate: true
+    start_timeout_seconds: 3.0
+    silence_seconds: 0.8
+  capture:
+    # auto probes every input device and picks the one carrying a live signal.
+    # Never trust the OS default: on the dev iMac it was a USB guitar amp that
+    # delivers permanent silence, and on a Pi it can be an HDMI dummy input.
+    # Set an explicit index or name substring here to pin a specific mic.
+    device: auto
+    sample_rate: 16000
+    channels: 1
+    # Hard recording cap. Silence (0.8s) ends the turn naturally; this only
+    # bounds runaway captures. 10s was chopping questions mid-sentence.
+    seconds: 25
+  followup:
+    # One wake word opens a conversation: after each reply Kendra keeps
+    # listening this long for a follow-up (longer when she asked a question),
+    # then returns to wake-word listening on silence.
+    enabled: true
+    window_seconds: 6.0
+    question_window_seconds: 12.0
+    max_turns: 8
+    # follow-up speech must clearly exceed ambient; 1.8x the calibrated floor
+    threshold_multiplier: 1.8
+  streaming:
+    enabled: true
+    min_phrase_chars: 28
+    max_phrase_chars: 140
+  thinking_sounds:
+    # Quiet synthesized blips (numpy -> sounddevice, no assets) that play
+    # while she is transcribing/generating, so thinking never sounds dead.
+    # Starts after a 0.9s grace so fast replies stay silent.
+    enabled: true
+    interval_seconds: 1.6
+    volume: 0.12
+  acks:
+    # Pre-synthesized Piper clips played the instant audio capture ends.
+    # Disabled by request: with first speech at ~1.5s, the wait word is
+    # unnecessary. Re-enable with enabled: true and a phrases list.
+    enabled: false
+    affect: curious
+    phrases: []
+agent:
+  socket: agent.sock
+  # Rolling dialogue context: the last N recorded turns (within the age
+  # window) are replayed as message history so Kendra can hold an actual
+  # conversation instead of answering every utterance cold.
+  history_turns: 10
+  history_max_age_seconds: 7200
+  max_tool_steps: 8
+  max_movement_calls: 3
+  mission_timeout_seconds: 300
+  client_timeout_seconds: 320
+  observation_refresh_seconds: 1.0
+  allow_autonomy: false
+  require_brain: true
+  require_reflex_for_chat: false
+  observe_people_each_turn: true
+  vision_context_timeout_seconds: 2.0
+autonomy:
+  socket: autonomy.sock
+  enabled: false
+  poll_seconds: 30
+  quiet_hours_start: '22:00'
+  quiet_hours_end: 08:00
+  minimum_battery_state: normal
+  unsolicited_speech_cooldown_seconds: 1800
+  mission_cooldown_seconds: 900
+dev:
+  startup_timeout_seconds: 8.0
+leds:
+  socket: leds.sock
+  driver: disabled
+  bridge_search_path: ./hardware/vendor
+  bridge_module: kendra_led_bridge
+updates:
+  public_key_file: ./config/minisign.pub
+  slots_root: /opt/kendra
+  git_remote: origin
+  git_branch: main
+  git_remote_url: https://github.com/NXTLupo/kendra.git
+  release_manifest_url: https://raw.githubusercontent.com/NXTLupo/kendra/main/releases/latest/manifest.yaml
+  release_signature_url: https://raw.githubusercontent.com/NXTLupo/kendra/main/releases/latest/manifest.minisig
+  release_archive_url: https://raw.githubusercontent.com/NXTLupo/kendra/main/releases/latest/kendra-update.tar.gz
+  staging_dir: ./exports/update-staging
+  max_archive_bytes: 104857600
+  allow_voice_check: true
+  allow_voice_install: false
+  activate_after_stage: false
+dashboard:
+  memory_upload_max_bytes: 26214400
+logging:
+  level: INFO
+identity:
+  socket: identity.sock
+  match_threshold: 0.5

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+SERVER="third_party/llama.cpp/build/bin/llama-server"
+SOURCE_MODEL="models/qwen3-1.7b/Qwen3-1.7B-Q8_0.gguf"   # pinned distribution artifact
+# Gemma 4 E2B: brain AND eyes in one model (mmproj below). Qwen3-1.7B and
+# Moondream stay on disk for one-line rollback via KENDRA_LLM_MODEL.
+MODEL="${KENDRA_LLM_MODEL:-models/gemma4-e2b/gemma-4-E2B-it-Q4_0.gguf}"
+MMPROJ="models/gemma4-e2b/mmproj-gemma-4-E2B-it-Q8_0.gguf"
+if [ ! -x "$SERVER" ]; then
+  echo "Missing llama-server: $SERVER. Run scripts/bootstrap_intel_macos.sh first." >&2
+  exit 2
+fi
+if [ ! -f "$SOURCE_MODEL" ]; then
+  echo "Missing model: $SOURCE_MODEL. Run: .venv/bin/python scripts/fetch_local_models.py --llm" >&2
+  exit 2
+fi
+# Q4_K_M measured 2.1x faster prefill and 1.6x faster generation than Q8_0 on
+# CPU with no observed dialogue-quality loss (docs/QWEN_VOICE_OPTIMIZATION.md).
+# It is generated locally from the SHA-pinned Q8_0, never downloaded.
+if [ ! -f "$MODEL" ]; then
+  QUANTIZE="third_party/llama.cpp/build/bin/llama-quantize"
+  if [ ! -x "$QUANTIZE" ]; then
+    echo "Building llama-quantize..." >&2
+    cmake --build third_party/llama.cpp/build --config Release --target llama-quantize -j 4 >&2
+  fi
+  echo "Generating runtime Q4_K_M from the pinned Q8_0 (one time, ~40s)..." >&2
+  "$QUANTIZE" --allow-requantize "$SOURCE_MODEL" "$MODEL" Q4_K_M >&2
+fi
+CPU_THREADS="$(sysctl -n hw.logicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+# --cache-reuse lets llama.cpp reuse the KV cache for an unchanged prompt
+# prefix. Kendra's charter and style exemplars are byte-identical every turn,
+# so this removes most of the measured 5.7s time-to-first-token.
+# Two slots so the background memory-consolidation call cannot evict the
+# conversation's cached prompt prefix between turns; llama.cpp routes each
+# request to the slot with the longest matching prefix.
+# Vision belongs to Moondream on 8081 (4s warm sight); loading the mmproj
+# here made images compete with conversation for brain slots and prefill.
+# KENDRA_BRAIN_VISION=1 re-enables unified mode for experiments.
+VISION_ARGS=""
+if [ "${KENDRA_BRAIN_VISION:-0}" = "1" ]; then
+  case "$MODEL" in *gemma4*|*gemma-4*) [ -f "$MMPROJ" ] && VISION_ARGS="--mmproj $MMPROJ" ;; esac
+fi
+mkdir -p "$ROOT/runtime/slots"
+exec "$SERVER" -m "$MODEL" $VISION_ARGS --host 127.0.0.1 --port 8080 -c 12288 -np 2 \
+  --slots --slot-save-path "$ROOT/runtime/slots/" \
+  \
+  --threads "$CPU_THREADS" --reasoning auto --reasoning-budget 128 --cache-reuse 256 \
+  --cors-origins localhost --no-cors-credentials

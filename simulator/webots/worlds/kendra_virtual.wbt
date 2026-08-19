@@ -1,0 +1,161 @@
+#VRML_SIM R2025b utf8
+
+WorldInfo {
+  basicTimeStep 32
+  title "Virtual Kendra — Adeept RaspClaws family digital twin"
+  info [
+    "Behavioral/kinematic digital twin for Kendra before physical deployment."
+    "Six legs are visualized with coxa/femur/tibia articulation (18 visual joints)."
+    "The current RaspClaws-Metal 17-servo hardware map remains a physical verification gate."
+  ]
+}
+Viewpoint {
+  orientation -0.291 0.927 0.236 1.201
+  position 3.4 2.5 3.8
+  follow "KENDRA"
+  followType "Mounted Shot"
+}
+TexturedBackground { }
+TexturedBackgroundLight { }
+
+Solid {
+  translation 0 -0.06 0
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.12 0.14 0.16 roughness 0.8 metalness 0 }
+      geometry Box { size 4 0.12 4 }
+    }
+  ]
+  name "test platform"
+  boundingObject Box { size 4 0.12 4 }
+}
+
+Solid {
+  translation 0.9 0.18 0.15
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.75 0.31 0.15 roughness 0.6 }
+      geometry Box { size 0.35 0.36 0.55 }
+    }
+  ]
+  name "obstacle"
+  boundingObject Box { size 0.35 0.36 0.55 }
+}
+
+Solid {
+  translation -1.15 0.45 -0.8
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.22 0.45 0.78 roughness 0.65 }
+      geometry Cylinder { height 0.8 radius 0.16 }
+    }
+    Pose {
+      translation 0 0.55 0
+      children [
+        Shape {
+          appearance PBRAppearance { baseColor 0.82 0.66 0.52 roughness 0.8 }
+          geometry Sphere { radius 0.14 }
+        }
+      ]
+    }
+  ]
+  name "person target"
+}
+
+Solid {
+  translation -1.55 0.10 1.35
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.92 0.92 0.92 roughness 0.8 }
+      geometry Box { size 0.42 0.20 0.42 }
+    }
+    Pose {
+      translation 0 0.15 -0.21
+      children [
+        Shape {
+          appearance PBRAppearance { baseColor 0.02 0.02 0.02 roughness 0.9 }
+          geometry Box { size 0.16 0.16 0.01 }
+        }
+      ]
+    }
+  ]
+  name "visual perch"
+}
+
+Robot {
+  translation 0 0.19 0.75
+  rotation 0 1 0 0
+  supervisor TRUE
+  controller "kendra_bridge"
+  name "KENDRA"
+  children [
+    Shape {
+      appearance PBRAppearance { baseColor 0.00 0.13 0.22 roughness 0.35 metalness 0.45 }
+      geometry Box { size 0.34 0.10 0.24 }
+    }
+    Pose {
+      translation 0.13 0.055 0
+      children [
+        Shape {
+          appearance PBRAppearance { baseColor 0.10 0.85 0.90 emissiveColor 0.02 0.15 0.16 roughness 0.25 }
+          geometry Box { size 0.045 0.035 0.16 }
+        }
+      ]
+    }
+    DEF HEAD Transform {
+      translation 0.18 0.08 0
+      rotation 0 1 0 0
+      children [
+        Shape {
+          appearance PBRAppearance { baseColor 0.02 0.02 0.025 roughness 0.3 metalness 0.2 }
+          geometry Box { size 0.10 0.075 0.16 }
+        }
+        Pose {
+          translation 0.052 0.005 0
+          rotation 0 0 1 1.5708
+          children [
+            Shape {
+              appearance PBRAppearance { baseColor 0.05 0.20 0.25 emissiveColor 0.04 0.35 0.40 }
+              geometry Cylinder { radius 0.022 height 0.012 }
+            }
+          ]
+        }
+      ]
+    }
+
+    DEF LEG_FL_COXA Transform {
+      translation 0.11 0 -0.10
+      rotation 0 1 0 -0.62
+      children [
+        Pose { translation 0.05 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.15 0.15 0.16 metalness 0.5 roughness 0.4 } geometry Box { size 0.10 0.035 0.035 } } ] }
+        DEF LEG_FL_FEMUR Transform {
+          translation 0.10 0 0 rotation 0 0 1 0.18
+          children [
+            Pose { translation 0.09 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.12 0.12 0.13 metalness 0.5 roughness 0.4 } geometry Box { size 0.18 0.032 0.032 } } ] }
+            DEF LEG_FL_TIBIA Transform { translation 0.18 0 0 rotation 0 0 1 -0.72 children [ Pose { translation 0.10 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.10 0.11 metalness 0.45 roughness 0.45 } geometry Box { size 0.20 0.028 0.028 } } ] } ] }
+          ]
+        }
+      ]
+    }
+    DEF LEG_ML_COXA Transform {
+      translation 0 0 -0.115 rotation 0 1 0 -1.57
+      children [ Pose { translation 0.05 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.15 0.15 0.16 metalness 0.5 roughness 0.4 } geometry Box { size 0.10 0.035 0.035 } } ] } DEF LEG_ML_FEMUR Transform { translation 0.10 0 0 rotation 0 0 1 0.18 children [ Pose { translation 0.09 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.12 0.12 0.13 metalness 0.5 roughness 0.4 } geometry Box { size 0.18 0.032 0.032 } } ] } DEF LEG_ML_TIBIA Transform { translation 0.18 0 0 rotation 0 0 1 -0.72 children [ Pose { translation 0.10 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.10 0.11 metalness 0.45 roughness 0.45 } geometry Box { size 0.20 0.028 0.028 } } ] } ] } ] } ]
+    }
+    DEF LEG_RL_COXA Transform {
+      translation -0.11 0 -0.10 rotation 0 1 0 -2.52
+      children [ Pose { translation 0.05 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.15 0.15 0.16 metalness 0.5 roughness 0.4 } geometry Box { size 0.10 0.035 0.035 } } ] } DEF LEG_RL_FEMUR Transform { translation 0.10 0 0 rotation 0 0 1 0.18 children [ Pose { translation 0.09 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.12 0.12 0.13 metalness 0.5 roughness 0.4 } geometry Box { size 0.18 0.032 0.032 } } ] } DEF LEG_RL_TIBIA Transform { translation 0.18 0 0 rotation 0 0 1 -0.72 children [ Pose { translation 0.10 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.10 0.11 metalness 0.45 roughness 0.45 } geometry Box { size 0.20 0.028 0.028 } } ] } ] } ] } ]
+    }
+    DEF LEG_FR_COXA Transform {
+      translation 0.11 0 0.10 rotation 0 1 0 0.62
+      children [ Pose { translation 0.05 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.15 0.15 0.16 metalness 0.5 roughness 0.4 } geometry Box { size 0.10 0.035 0.035 } } ] } DEF LEG_FR_FEMUR Transform { translation 0.10 0 0 rotation 0 0 1 0.18 children [ Pose { translation 0.09 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.12 0.12 0.13 metalness 0.5 roughness 0.4 } geometry Box { size 0.18 0.032 0.032 } } ] } DEF LEG_FR_TIBIA Transform { translation 0.18 0 0 rotation 0 0 1 -0.72 children [ Pose { translation 0.10 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.10 0.11 metalness 0.45 roughness 0.45 } geometry Box { size 0.20 0.028 0.028 } } ] } ] } ] } ]
+    }
+    DEF LEG_MR_COXA Transform {
+      translation 0 0 0.115 rotation 0 1 0 1.57
+      children [ Pose { translation 0.05 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.15 0.15 0.16 metalness 0.5 roughness 0.4 } geometry Box { size 0.10 0.035 0.035 } } ] } DEF LEG_MR_FEMUR Transform { translation 0.10 0 0 rotation 0 0 1 0.18 children [ Pose { translation 0.09 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.12 0.12 0.13 metalness 0.5 roughness 0.4 } geometry Box { size 0.18 0.032 0.032 } } ] } DEF LEG_MR_TIBIA Transform { translation 0.18 0 0 rotation 0 0 1 -0.72 children [ Pose { translation 0.10 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.10 0.11 metalness 0.45 roughness 0.45 } geometry Box { size 0.20 0.028 0.028 } } ] } ] } ] } ]
+    }
+    DEF LEG_RR_COXA Transform {
+      translation -0.11 0 0.10 rotation 0 1 0 2.52
+      children [ Pose { translation 0.05 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.15 0.15 0.16 metalness 0.5 roughness 0.4 } geometry Box { size 0.10 0.035 0.035 } } ] } DEF LEG_RR_FEMUR Transform { translation 0.10 0 0 rotation 0 0 1 0.18 children [ Pose { translation 0.09 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.12 0.12 0.13 metalness 0.5 roughness 0.4 } geometry Box { size 0.18 0.032 0.032 } } ] } DEF LEG_RR_TIBIA Transform { translation 0.18 0 0 rotation 0 0 1 -0.72 children [ Pose { translation 0.10 0 0 children [ Shape { appearance PBRAppearance { baseColor 0.10 0.10 0.11 metalness 0.45 roughness 0.45 } geometry Box { size 0.20 0.028 0.028 } } ] } ] } ] } ]
+    }
+  ]
+}

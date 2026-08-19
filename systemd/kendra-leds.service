@@ -1,0 +1,19 @@
+[Unit]
+Description=Kendra deterministic status light service
+After=local-fs.target
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+SupplementaryGroups=gpio spi
+EnvironmentFile=-/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStart=/opt/kendra/current/.venv/bin/kendra --config /etc/kendra/production.yaml service leds
+Restart=always
+RestartSec=2
+RuntimeDirectory=kendra
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

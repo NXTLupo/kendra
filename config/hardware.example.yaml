@@ -1,0 +1,31 @@
+# Copy this file to config/hardware.local.yaml only after completing the build guide.
+# Real hardware mode fails closed until every gate below is true.
+project:
+  mode: simulation
+
+hardware_gates:
+  servo_mapping_verified: false
+  battery_path_verified: false
+  e_stop_verified: false
+  cliff_array_verified: false
+  motion_calibrated: false
+
+body:
+  driver: simulation
+  capabilities:
+    body_name: raspclaws-metal
+    leg_dof: 0
+    camera_dof: 0
+    has_head_gimbal: false
+    has_imu: true
+    has_cliff_sensors: true
+    cliff_sensor_count: 4
+    has_servo_feedback: false
+    supports_height_control: false
+    supports_overload_telemetry: false
+    has_ultrasonic: true
+    has_battery_voltage: false
+
+reflex:
+  sensors:
+    provider: simulation

@@ -1,0 +1,33 @@
+use_default_settings: true
+general:
+  debug: false
+  instance_name: "Kendra Local Search"
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "overridden-by-SEARXNG_SECRET"
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+# News quality: the default news category leaned on market-blog feeds, which
+# produced technically-real but unrecognizable "top headlines". Enable the
+# major aggregators so news questions return front-page stories.
+engines:
+  - name: google news
+    disabled: false
+  - name: bing news
+    disabled: false
+  - name: duckduckgo news
+    disabled: false
+
+# Slow news engines were stalling voice turns; a hard outgoing timeout keeps
+# any single engine from holding the search hostage.
+outgoing:
+  request_timeout: 4.0
+  max_request_timeout: 6.0

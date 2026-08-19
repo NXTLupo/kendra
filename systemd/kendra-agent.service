@@ -1,0 +1,20 @@
+[Unit]
+Description=Kendra local planner/agent service
+After=kendra-reflex.service kendra-body.service kendra-brain.service kendra-llm.service
+Wants=kendra-reflex.service kendra-body.service kendra-brain.service kendra-llm.service kendra-research.service kendra-vision.service kendra-leds.service kendra-delivery.service
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+EnvironmentFile=-/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStart=/opt/kendra/current/.venv/bin/kendra --config /etc/kendra/production.yaml service agent
+Restart=always
+RestartSec=2
+RuntimeDirectory=kendra
+StateDirectory=kendra
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

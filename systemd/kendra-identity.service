@@ -1,0 +1,20 @@
+[Unit]
+Description=Kendra local biometric identity service
+After=local-fs.target kendra-brain.service
+Wants=kendra-brain.service
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+EnvironmentFile=-/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStart=/opt/kendra/current/.venv/bin/kendra --config /etc/kendra/production.yaml service identity
+Restart=always
+RestartSec=2
+RuntimeDirectory=kendra
+StateDirectory=kendra
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target

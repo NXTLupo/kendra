@@ -1,0 +1,20 @@
+[Unit]
+Description=Kendra local whisper.cpp ASR server
+After=local-fs.target
+
+[Service]
+Type=simple
+User=kendra
+Group=kendra
+EnvironmentFile=/etc/kendra/kendra.env
+WorkingDirectory=/opt/kendra/current
+ExecStart=/opt/kendra/current/third_party/whisper.cpp/build/bin/whisper-server -m /var/lib/kendra/models/whisper/ggml-small.en.bin --host 127.0.0.1 --port 8082 -t 4
+Restart=always
+RestartSec=3
+StateDirectory=kendra
+UMask=0007
+# Memory-pressure policy: senses and speech are sacrificed before safety.
+OOMScoreAdjust=300
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,34 @@
+project:
+  mode: simulation
+
+paths:
+  runtime_dir: ./runtime/webots
+
+body:
+  driver: webots
+  capabilities:
+    body_name: kendra-webots-digital-twin
+    leg_dof: 18
+    camera_dof: 2
+    has_head_gimbal: true
+    has_imu: true
+    has_cliff_sensors: true
+    cliff_sensor_count: 4
+    has_servo_feedback: true
+    supports_height_control: true
+    supports_overload_telemetry: true
+    has_ultrasonic: true
+    has_battery_voltage: true
+  webots:
+    host: 127.0.0.1
+    port: 8765
+    connect_timeout_seconds: 2.0
+
+reflex:
+  sensors:
+    provider: webots
+
+vision:
+  camera_provider: opencv
+  camera_index: 0
+  semantic_vlm_url: http://127.0.0.1:8081/v1

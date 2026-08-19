@@ -1,0 +1,119 @@
+models:
+  text_brain:
+    name: Qwen3-1.7B
+    format: GGUF
+    quantization: Q4_K_M (runtime, generated locally from the pinned Q8_0)
+    path: models/qwen3-1.7b/Qwen3-1.7B-Q4_K_M.requant.gguf
+    sha256_local_requant: 54c0f1203a724e9f33e76916beab3bdfaffef56cf7b42a93b1bc21319fc0bf97
+    source_path: models/qwen3-1.7b/Qwen3-1.7B-Q8_0.gguf
+    source_sha256: 061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a
+    license: Apache-2.0
+    status: provisioned-and-verified-intel-imac; pi-benchmark-pending
+    generation: llama-quantize --allow-requantize <Q8_0> <this> Q4_K_M
+    notes: >-
+      Replaced Qwen3-0.6B on 2026-08-17 after a controlled A/B showed 0.6B
+      cannot hold coherent multi-turn dialogue (verbatim self-repeats,
+      identity confusion, exemplar leakage). Same artifact intended for the
+      Pi; run llama-bench on the Pi before production freeze, with a locally
+      quantized Q4_K_M as the fallback if Q8_0 generation is below speech rate.
+
+  retired_text_brain:
+    name: Qwen3-0.6B
+    format: GGUF
+    quantization: Q8_0
+    path: models/qwen3-0.6b/Qwen3-0.6B-Q8_0.gguf
+    sha256: 9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031
+    license: Apache-2.0
+    status: retired-kept-as-ab-baseline
+    notes: Latency floor reference only. No runtime profile points at it.
+
+  optional_deep_text_brain:
+    name: Qwen3-4B
+    format: GGUF
+    quantization: Q4_K_M
+    path: models/qwen3-4b/Qwen3-4B-Q4_K_M.gguf
+    sha256: 7485fe6f11af29433bc51cab58009521f205840f5b4ae3a32fa7f92e8534fdf5
+    license: Apache-2.0
+    status: optional-offline-development-only
+    notes: Not used by the live companion runtime because it breaks Pi latency parity.
+
+  multimodal_vision:
+    name: Moondream2 (20250414)
+    runtime: llama.cpp-libmtmd (--no-jinja; vicuna template drops media marker under jinja)
+    endpoint: http://127.0.0.1:8081/v1
+    path: models/moondream2/moondream2-text-model-Q4_K_M.gguf
+    sha256_local_requant: 6b04b0516b8e2687f1b17e7c26a07c4a7ff2a9707b5dd6b43c7c7bb2c9e0aa9d
+    source_path: models/moondream2/moondream2-text-model-f16.gguf
+    source_sha256: 925bcb666baf69ed747e26121af287b16ae7764483be9548b1382f29783689a5
+    mmproj_path: models/moondream2/moondream2-mmproj-f16.gguf
+    mmproj_sha256: 4cc1cb3660d87ff56432ebeb7884ad35d67c48c7b9f6b2856f305e39c38eed8f
+    license: Apache-2.0
+    status: pi-imac-parity-eyes; warm sight ~4s on iMac
+    notes: >-
+      Replaced Qwen2.5-VL-3B on 2026-08-18 for Pi parity: ~2 GB resident vs
+      ~3.5 GB, warm sight 4 s vs 10-27 s. Earlier rejection was measured under
+      swap thrash and was wrong. Qwen-VL artifacts retired to
+      models/qwen2.5-vl-3b/ as a quality-comparison baseline.
+
+  asr:
+    name: Moonshine small-streaming-en (quantized ONNX Runtime)
+    runtime: moonshine-voice==0.0.59
+    path: models/moonshine/download.moonshine.ai/model/small-streaming-en/quantized
+    sha256: per-file-artifacts-see-moonshine-voice-downloader
+    status: provisioned-and-verified-intel-imac
+    notes: >-
+      Replaced whisper.cpp base.en. Streaming-capable, materially lower
+      first-token latency on CPU, and the same artifact runs on the Pi.
+
+  retired_asr:
+    name: whisper.cpp base.en
+    path: models/whisper/ggml-base.en.bin
+    sha256: a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
+    status: retired-superseded-by-moonshine
+    notes: Kept only for provenance. No runtime code path reads it.
+
+  wake_word:
+    name: Vosk small US English 0.15
+    phrase: kendra
+    path: models/vosk/vosk-model-small-en-us-0.15
+    source_archive: models/vosk/vosk-model-small-en-us-0.15.zip
+    sha256: 30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498
+    license: Apache-2.0
+    status: provisioned-and-verified-intel-imac
+
+  tts:
+    engine: Piper
+    name: en_US-amy-medium
+    path: models/piper/en_US-amy-medium/en_US-amy-medium.onnx
+    config_path: models/piper/en_US-amy-medium/en_US-amy-medium.onnx.json
+    sha256: b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18
+    config_sha256: 95a23eb4d42909d38df73bb9ac7f45f597dbfcde2d1bf9526fdeaf5466977d77
+    engine_license: GPL-3.0
+    voice_license: audit-voice-license-separately
+    status: provisioned-and-verified-intel-imac
+
+  embeddings:
+    name: all-MiniLM-L6-v2 (ONNX, onnxruntime CPU)
+    path: models/embeddings/all-MiniLM-L6-v2
+    model_sha256: 6fd5d72fe4589f189f8ebc006442dbb529bb7ce38f8082112682524616046452
+    tokenizer_sha256: be50c3628f2bf5bb5e3a7f17b1f74611b2561a3a27eeab05e5aa30f411572037
+    license: Apache-2.0
+    status: provisioned-and-verified-intel-imac; default-brain-embeddings
+    notes: >-
+      Replaced the hashing fallback on 2026-08-18: hybrid memory search
+      weights semantic similarity at 0.58, which was noise without real
+      vectors. ~20 ms/encode on CPU; onnxruntime + tokenizers wheels exist
+      for both x86_64 macOS and Linux aarch64.
+    fallback: deterministic-local-hashing-vectors
+
+  face_detection:
+    name: YuNet
+    path: models/vision/face_detection_yunet_2023mar.onnx
+    sha256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+    status: provisioned-and-verified-intel-imac
+
+  face_recognition:
+    name: SFace
+    path: models/vision/face_recognition_sface_2021dec.onnx
+    sha256: 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+    status: provisioned-and-verified-intel-imac

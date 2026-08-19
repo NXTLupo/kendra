@@ -1,0 +1,7 @@
+archives: []
+# Add entries only after copying and hashing a real ZIM.
+# - filename: wikipedia_en_all_nopic_YYYY-MM.zim
+#   book_name: wikipedia_en_all_nopic
+#   archive_date: YYYY-MM
+#   size_bytes: 0
+#   sha256: "..."
