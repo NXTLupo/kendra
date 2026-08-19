@@ -63,6 +63,14 @@ _NOT_NAMES = {
 }
 
 
+# Household-name transliterations: ASR renders unfamiliar names phonetically
+# ("Peiyi" arrived as "a payee"). Alias map fixes them deterministically.
+_NAME_ALIASES = {
+    "payee": "Peiyi", "pay e": "Peiyi", "payi": "Peiyi", "pei yi": "Peiyi",
+    "pay yee": "Peiyi", "peggy e": "Peiyi", "pey e": "Peiyi",
+}
+
+
 def _extract_name(text: str) -> str | None:
     """Pull a plausible human name out of a spoken introduction."""
     stripped = text.strip().strip(".!?,")
@@ -76,6 +84,9 @@ def _extract_name(text: str) -> str | None:
         candidate = stripped
     if candidate.split()[0].casefold() in _NOT_NAMES:
         return None
+    alias = _NAME_ALIASES.get(candidate.casefold())
+    if alias:
+        return alias
     return " ".join(w.title() for w in candidate.split())
 
 
