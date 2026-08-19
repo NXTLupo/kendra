@@ -526,24 +526,23 @@ class VisionService:
             # Reflex: an unfamiliar face means she walks over (just did) and
             # introduces herself — the meet ritual runs in the voice service.
             # Cooldown so a missed name capture doesn't loop the greeting.
-            unknown_faces = [
-                q
-                for q in (after or {}).get("recognized_people", []) or []
-                if isinstance(q, dict) and q.get("status") != "recognized"
-            ]
+            # ANY unrecognized person triggers the introduction — a missed
+            # YuNet detection (face turned away) must not demote the ritual
+            # to a generic comment; enrollment does its own captures and the
+            # ritual exits gracefully if no name is heard. The cooldown burns
+            # only when the ritual actually starts.
             if (
-                unknown_faces
-                and not names
+                not names
                 and bool(self.settings.get("vision.ambient.meet_new_people", True))
                 and time.time() - getattr(self, "_last_meet_at", 0.0)
                 > float(self.settings.get("vision.ambient.meet_cooldown_seconds", 300))
             ):
-                self._last_meet_at = time.time()
                 try:
                     voice = UnixJsonClient(self.settings.runtime_dir / "voice.sock", timeout=10)
                     started = await voice.call("meet_person", {})
                     LOG.info("Meet ritual: %s", started)
                     if started.get("ok"):
+                        self._last_meet_at = time.time()
                         return
                 except Exception:
                     LOG.debug("Meet ritual unavailable", exc_info=True)
@@ -699,6 +698,10 @@ class VisionClient:
 
     async def submit_frame(self, image_b64: str) -> dict[str, Any]:
         return await self.rpc.call("submit_frame", {"image": image_b64})
+
+    async def recognize_faces_now(self) -> dict[str, Any]:
+        """Fast identity check: capture + YuNet + SFace, no VLM involved."""
+        return await self.rpc.call("recognize_faces", {})
 
 
 def run(settings: Settings) -> None:

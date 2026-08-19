@@ -480,6 +480,41 @@ remembered, researched, or did something unless the context supports it.
             }
         ]
 
+    async def _fast_who_answer(self, user_text: str) -> tuple[str, bool] | None:
+        """Identity questions on the millisecond path: capture + face
+        recognizer only. A who-question was paying a full Moondream scene
+        description (16-40s) to read a name that YuNet+SFace produce in
+        ~0.3s. Returns (reply, launch_meet) or None to fall back to the
+        full sight path (e.g. no face found — maybe turned away)."""
+        try:
+            result = await asyncio.wait_for(self.vision.recognize_faces_now(), timeout=8.0)
+        except Exception:
+            return None
+        matches = [m for m in (result or {}).get("matches", []) if isinstance(m, dict)]
+        if not matches:
+            return None
+        names = [
+            str(m.get("display_name"))
+            for m in matches
+            if m.get("status") == "recognized" and m.get("display_name")
+        ]
+        unknown = len(matches) - len(names)
+        timings = getattr(self, "_turn_timings", None)
+        if timings is not None:
+            timings["kind"] = "sight (faces)"
+        if names and not unknown:
+            return (f"That's {' and '.join(names)}!", False)
+        if names and unknown:
+            return (
+                f"I see {' and '.join(names)}, and someone I don't know yet — "
+                "let me introduce myself!",
+                True,
+            )
+        return (
+            "I can see someone, but I don't know them yet — let me introduce myself!",
+            True,
+        )
+
     async def _look_now(self, user_text: str, observation: dict[str, Any]) -> None:
         """Deterministic sight: when the user asks Kendra to look, she looks.
 
@@ -1055,6 +1090,16 @@ remembered, researched, or did something unless the context supports it.
         tool_schemas = self._relevant_tool_schemas(user_text, registry.schemas())
         allowed_tools = {str(schema["name"]) for schema in tool_schemas}
         if "observe" in allowed_tools:
+            if self._WHO_QUESTION.search(user_text):
+                fast = await self._fast_who_answer(user_text)
+                if fast is not None:
+                    reply, launch_meet = fast
+                    result = await self._remember_plain_turn(
+                        session_id, user_text, reply, source=source, autonomous=autonomous
+                    )
+                    if launch_meet:
+                        result["meet_person"] = True
+                    return result
             await self._look_now(user_text, observation)
             if not observation.get("visual_scene"):
                 # Universal blind-sight gate: with no fresh image she says so
@@ -1447,6 +1492,17 @@ remembered, researched, or did something unless the context supports it.
             # asked her to do something, and silence until the answer reads
             # as ignoring him (his words). Also free perceived latency —
             # she speaks while her eyes work.
+            if self._WHO_QUESTION.search(user_text):
+                fast = await self._fast_who_answer(user_text)
+                if fast is not None:
+                    reply, launch_meet = fast
+                    await on_delta(reply, "delighted" if not launch_meet else "curious")
+                    result = await self._remember_plain_turn(
+                        session_id, user_text, reply, source=source, streamed=True
+                    )
+                    if launch_meet:
+                        result["meet_person"] = True
+                    return result
             await on_delta("Let me take a look right now. ", "curious")
             # Sight and memory retrieval are independent — overlap them.
             # Profiled: serializing them added the full retrieval time to
