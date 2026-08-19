@@ -271,20 +271,31 @@ remembered, researched, or did something unless the context supports it.
     _BUILD_QUESTION = re.compile(
         r"\b(your (?:robot |new |physical |hexapod )?body|transplant|your build|"
         r"your evolution|build you|put (?:you|your.{0,20}brain) into|raspclaws|"
-        r"when (?:we|i) build|your (?:next|future) form|hexapod body)\b",
+        r"when (?:we|i) build|your (?:next|future) form|hexapod body|"
+        # Her knowledge architecture is build self-knowledge too — asked
+        # about her wiki/second brain she once denied having one.
+        r"second brain|wiki|manifest|how (?:do you|does your) (?:remember|learn|memory)|"
+        r"your (?:memory|knowledge) (?:system|architecture)|karpathy)\b",
         re.I,
     )
 
-    async def _build_plan_note(self) -> list[dict[str, Any]]:
+    async def _build_plan_note(self, user_text: str = "") -> list[dict[str, Any]]:
         """Her transplant plan, injected deterministically.
 
         She was seeded with comprehensive build knowledge but a question
         phrased as "what happens when we put your brain into your robot
         body" missed every routing keyword and she claimed ignorance.
         Build/evolution questions now always carry her own plan memories.
+        The search follows the user's actual question: a fixed transplant
+        query surfaced chassis phases when Jonathan asked about her wiki,
+        and she denied having a second brain while owning one.
         """
         try:
-            hits = await self.brain.search("my hexapod body build transplant plan phases computer parts", 8)
+            # Wide limit: episode memories of past Q&A rank high on repeat
+            # questions and would otherwise crowd every fact out of the cut.
+            hits = await self.brain.search(
+                f"{user_text} my build plan and architecture".strip(), 16
+            )
         except Exception:
             return []
         plan = [
@@ -1203,7 +1214,7 @@ remembered, researched, or did something unless the context supports it.
         await self.brain.begin_session(session_id, context=source)
 
         build_note = (
-            await self._build_plan_note() if self._BUILD_QUESTION.search(user_text) else []
+            await self._build_plan_note(user_text) if self._BUILD_QUESTION.search(user_text) else []
         )
         cached_answer = None if build_note else await self._cached_answer(user_text)
         if cached_answer:

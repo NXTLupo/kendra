@@ -40,7 +40,8 @@ def main() -> int:
     stored = 0
     arch = Path("docs/ARCHITECTURE_CURRENT.md").read_text(encoding="utf-8")
     for line in arch.splitlines():
-        match = re.match(r"^- (\w[\w-]*): (.+)$", line.strip())
+        # Organ names may contain spaces ("second brain", "target hardware").
+        match = re.match(r"^- (\w[\w -]*?): (.+)$", line.strip())
         if not match:
             continue
         component, description = match.group(1), match.group(2)
