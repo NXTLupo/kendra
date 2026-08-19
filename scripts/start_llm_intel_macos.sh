@@ -41,7 +41,7 @@ CPU_THREADS=$(( CPU_PHYS - 1 )); [ "$CPU_THREADS" -lt 3 ] && CPU_THREADS=3
 # Two slots so the background memory-consolidation call cannot evict the
 # conversation's cached prompt prefix between turns; llama.cpp routes each
 # request to the slot with the longest matching prefix.
-# Vision belongs to Moondream on 8081 (4s warm sight); loading the mmproj
+# Vision belongs to Moondream on 17801 (4s warm sight); loading the mmproj
 # here made images compete with conversation for brain slots and prefill.
 # KENDRA_BRAIN_VISION=1 re-enables unified mode for experiments.
 VISION_ARGS=""
@@ -52,7 +52,7 @@ mkdir -p "$ROOT/runtime/slots"
 # --mlock pins the weights in RAM: without it, a half hour of desktop use
 # paged her brain to swap and the first turn after idle took 117 s at
 # 5.5 s/token while pages faulted back in. Same flag on the Pi units.
-exec "$SERVER" -m "$MODEL" $VISION_ARGS --host 127.0.0.1 --port 8080 -c 12288 -np 2 \
+exec "$SERVER" -m "$MODEL" $VISION_ARGS --host 127.0.0.1 --port 17800 -c 12288 -np 2 \
   --slots --slot-save-path "$ROOT/runtime/slots/" \
   --mlock \
   --threads "$CPU_THREADS" --reasoning auto --reasoning-budget 128 --cache-reuse 256 \

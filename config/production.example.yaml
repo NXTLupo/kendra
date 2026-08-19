@@ -54,7 +54,7 @@ vision:
     the floor and angled upward; interpret scale and occlusion accordingly.
     Describe only what is actually visible.
   camera_provider: picamera2
-  semantic_vlm_url: http://127.0.0.1:8081/v1
+  semantic_vlm_url: http://127.0.0.1:17801/v1
   face:
     yunet_model: /var/lib/kendra/models/vision/face_detection_yunet_2023mar.onnx
     sface_model: /var/lib/kendra/models/vision/face_recognition_sface_2021dec.onnx

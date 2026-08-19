@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Kendra's persistent local whisper.cpp ASR server on 127.0.0.1:8082.
+# Start Kendra's persistent local whisper.cpp ASR server on 127.0.0.1:17802.
 # Keeping the model resident saves ~0.8s of dead air on every spoken turn.
 # The Raspberry Pi runs the same binary under systemd/kendra-asr.service.
 set -euo pipefail
@@ -17,4 +17,4 @@ if [ ! -f "$MODEL" ]; then
   exit 2
 fi
 CPU_THREADS="$(sysctl -n hw.logicalcpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
-exec "$SERVER" -m "$MODEL" --host 127.0.0.1 --port 8082 -t "$CPU_THREADS"
+exec "$SERVER" -m "$MODEL" --host 127.0.0.1 --port 17802 -t "$CPU_THREADS"

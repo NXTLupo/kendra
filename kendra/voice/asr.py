@@ -94,7 +94,7 @@ class WhisperServerASR(WhisperCppASR):
     def __init__(self, settings: Settings):
         super().__init__(settings)
         self.base_url = str(
-            settings.get("voice.asr.server_url", "http://127.0.0.1:8082")
+            settings.get("voice.asr.server_url", "http://127.0.0.1:17802")
         ).rstrip("/")
         assert_loopback_http_url(self.base_url)
         self.timeout = float(settings.get("voice.asr.server_timeout_seconds", 30))

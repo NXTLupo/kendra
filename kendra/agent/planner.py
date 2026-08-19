@@ -533,9 +533,26 @@ remembered, researched, or did something unless the context supports it.
         to talk about what her eyes actually returned.
         """
         look_started = time.monotonic()
+        # Generic sight questions may reuse a description her ambient eyes
+        # produced moments ago (ELC addContext pattern) — the scene is
+        # already in words, no fresh 8-16s Moondream pass. Precision asks
+        # (counting, reading, held objects, identity) always look fresh.
+        precise = re.search(
+            r"\b(count|how many|read|written|says?|text|word|letter|number|"
+            r"finger|hold|holding|color|colour|wearing|who)\b",
+            user_text or "",
+            re.I,
+        )
+        reuse_window = 0.0 if precise else float(
+            self.settings.get("vision.reuse_recent_seconds", 45.0)
+        )
         try:
             visual = await asyncio.wait_for(
-                self.vision.observe(True, (user_text or "Describe the scene.")[:200]),
+                self.vision.observe(
+                    True,
+                    (user_text or "Describe the scene.")[:200],
+                    reuse_recent_seconds=reuse_window,
+                ),
                 timeout=float(self.settings.get("vision.look_timeout_seconds", 40.0)),
             )
             timings = getattr(self, "_turn_timings", None)

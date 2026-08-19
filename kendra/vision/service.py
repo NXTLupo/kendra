@@ -361,7 +361,12 @@ class VisionService:
         self._semantic_cache[cache_key] = description
         return description
 
-    async def observe(self, semantic: bool = False, question: str = "Describe the scene briefly.") -> dict[str, Any]:
+    async def observe(
+        self,
+        semantic: bool = False,
+        question: str = "Describe the scene briefly.",
+        reuse_recent_seconds: float = 0.0,
+    ) -> dict[str, Any]:
         frame, path = await asyncio.to_thread(self.capture)
         provided_at = getattr(self, "_provided_frame_at", 0.0)
         frame_age = round(time.time() - provided_at, 1) if provided_at else 0.0
@@ -384,7 +389,21 @@ class VisionService:
             result["recognized_people"] = []
             result["face_recognition_status"] = f"unavailable:{type(exc).__name__}"
         if semantic:
-            result["description"] = await self.semantic_description(path, question)
+            # ELC addContext pattern, localized: her ambient eyes describe
+            # the scene continuously, so a GENERIC sight question can reuse
+            # a description from moments ago instead of paying a fresh
+            # 8-16s Moondream pass. Precision questions (counting, reading,
+            # identity) and stale descriptions always take the full look.
+            recent_ok = float(reuse_recent_seconds or 0)
+            last_at = getattr(self, "_last_description_at", 0.0)
+            last_text = getattr(self, "_last_description", "")
+            if recent_ok > 0 and last_text and time.time() - last_at <= recent_ok:
+                result["description"] = last_text
+                result["description_age_seconds"] = round(time.time() - last_at, 1)
+            else:
+                result["description"] = await self.semantic_description(path, question)
+                self._last_description = result["description"]
+                self._last_description_at = time.time()
         return result
 
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
@@ -393,7 +412,11 @@ class VisionService:
         if method == "submit_frame":
             return await asyncio.to_thread(self.submit_frame, str(params["image"]))
         if method == "observe":
-            return await self.observe(bool(params.get("semantic", False)), str(params.get("question", "Describe the scene briefly.")))
+            return await self.observe(
+                bool(params.get("semantic", False)),
+                str(params.get("question", "Describe the scene briefly.")),
+                float(params.get("reuse_recent_seconds", 0.0)),
+            )
         if method == "capture":
             _, path = await asyncio.to_thread(self.capture)
             return {"photo_id": path.stem, "path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -701,8 +724,20 @@ class VisionClient:
     def __init__(self, settings: Settings):
         self.rpc = UnixJsonClient(settings.socket_path("vision"), timeout=100)
 
-    async def observe(self, semantic: bool = False, question: str = "Describe the scene briefly.") -> dict[str, Any]:
-        return await self.rpc.call("observe", {"semantic": semantic, "question": question})
+    async def observe(
+        self,
+        semantic: bool = False,
+        question: str = "Describe the scene briefly.",
+        reuse_recent_seconds: float = 0.0,
+    ) -> dict[str, Any]:
+        return await self.rpc.call(
+            "observe",
+            {
+                "semantic": semantic,
+                "question": question,
+                "reuse_recent_seconds": reuse_recent_seconds,
+            },
+        )
 
     async def submit_frame(self, image_b64: str) -> dict[str, Any]:
         return await self.rpc.call("submit_frame", {"image": image_b64})

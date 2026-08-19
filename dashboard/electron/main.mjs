@@ -217,7 +217,7 @@ function warmVisionModel() {
     max_tokens: 2,
   });
   const request = http.request(
-    { host: "127.0.0.1", port: 8081, path: "/v1/chat/completions", method: "POST",
+    { host: "127.0.0.1", port: 17801, path: "/v1/chat/completions", method: "POST",
       headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }, timeout: 180_000 },
     (response) => { response.resume(); log.info("runtime", "vision model graph warmed"); },
   );
@@ -232,12 +232,12 @@ async function ensureRuntime() {
   // pushed a 16 GB iMac deep into swap and destroyed voice latency, so it is
   // opt-in: set KENDRA_START_VLM=1 or run scripts/start_vlm_intel_macos.sh.
   const jobs = [
-    ensureModel("start_llm_intel_macos.sh", 8080),
-    ensureModel("start_asr_intel_macos.sh", 8082),
+    ensureModel("start_llm_intel_macos.sh", 17800),
+    ensureModel("start_asr_intel_macos.sh", 17802),
   ];
   // The Q4 brain freed ~2.3 GB, so her semantic eyes fit in memory again.
   // Set KENDRA_START_VLM=0 to keep the vision model off.
-  if (process.env.KENDRA_START_VLM !== "0") jobs.push(ensureModel("start_vlm_intel_macos.sh", 8081));
+  if (process.env.KENDRA_START_VLM !== "0") jobs.push(ensureModel("start_vlm_intel_macos.sh", 17801));
   const [llm, vlm] = await Promise.allSettled(jobs);
   if (llm.status === "rejected") throw llm.reason;
   if (vlm && vlm.status === "rejected") console.error("Kendra's optional semantic vision model is unavailable", vlm.reason);

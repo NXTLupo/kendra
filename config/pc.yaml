@@ -29,7 +29,7 @@ reflex:
 vision:
   camera_provider: opencv
   camera_index: 0
-  semantic_vlm_url: http://127.0.0.1:8081/v1
+  semantic_vlm_url: http://127.0.0.1:17801/v1
 
 voice:
   # Desktop: no physical motion to emergency-stop, and the per-phrase stop

@@ -86,7 +86,7 @@ reflex:
       samples_per_sensor: 3
       floor_votes_required: 2
 llm:
-  base_url: http://127.0.0.1:8080/v1
+  base_url: http://127.0.0.1:17800/v1
   model: qwen3-1.7b-q4_k_m
   # The interactive model is identical on Intel macOS and Raspberry Pi.
   # 1.7B replaced 0.6B on 2026-08-17: measured A/B showed 0.6B cannot hold
@@ -176,7 +176,7 @@ connectivity:
 research:
   socket: research.sock
   searxng_url: http://127.0.0.1:8888
-  kiwix_url: http://127.0.0.1:8090
+  kiwix_url: http://127.0.0.1:17890
   kiwix_book: wikipedia_en_all_nopic
   max_results: 5
   max_pages: 2
@@ -230,7 +230,7 @@ voice:
     # Falls back automatically to whisper_server, then whisper-cli.
     provider: parakeet_onnx
     parakeet_dir: ./models/parakeet/parakeet-tdt-0.6b-v3-onnx
-    server_url: http://127.0.0.1:8082
+    server_url: http://127.0.0.1:17802
     server_timeout_seconds: 30
     whisper_cli: ./third_party/whisper.cpp/build/bin/whisper-cli
     # small.en: base.en was mishearing whole sentences through a room mic
