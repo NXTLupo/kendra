@@ -716,8 +716,13 @@ remembered, researched, or did something unless the context supports it.
         ]
 
     _WHO_QUESTION = re.compile(
-        r"\bwho (?:do you see|is (?:this|that|it|here|in the room|with (?:me|us))|am i(?: with)?)"
-        r"|\bwho'?s (?:this|that|here|in the room|with (?:me|us))"
+        # Any identity-shaped sight question takes the 0.3s face-recognizer
+        # path. "tell me who you see" once missed this (regex demanded
+        # "who DO you see") and paid a 40-92s Moondream timeout instead.
+        r"\bwho (?:do |can |will )?(?:you|she|he) (?:can )?sees?\b"
+        r"|\btell me who\b|\bsee who\b"
+        r"|\bwho (?:is|'?s) (?:this|that|it|here|there|around|in the room|with (?:me|us))\b"
+        r"|\bwho am i(?: with)?\b"
         r"|\b(?:the )?(?:person|people)(?:'s)? names?\b|\bname of (?:the |this |that )?person\b"
         r"|\bdo you (?:recognize|know) (?:me|them|him|her|this person)\b",
         re.I,
