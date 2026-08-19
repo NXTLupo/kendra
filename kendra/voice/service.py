@@ -250,7 +250,7 @@ class VoiceService:
                     continue
                 if difflib.SequenceMatcher(
                     None, user_text.casefold(), spoken.casefold()
-                ).ratio() > 0.55:
+                ).ratio() > 0.45:
                     LOG.info("Discarded self-echo transcript: %r", user_text[:60])
                     return {"heard": "", "response": ""}
             lowered = user_text.strip().lower().rstrip(".!")
@@ -321,6 +321,11 @@ class VoiceService:
     async def one_turn(
         self, start_timeout: float | None = None, threshold_multiplier: float = 1.0
     ) -> dict[str, Any]:
+        # Never open the microphone while her own voice is still playing —
+        # an ambient comment landing right as a capture window opened is how
+        # her speech ended up transcribed as a user turn.
+        while time.time() < getattr(self, "_speaking_until", 0.0):
+            await asyncio.sleep(0.2)
         async with self._capture_lock:
             self._manual_capture_active.set()
             self._wake_cancel.set()
