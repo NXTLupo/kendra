@@ -309,7 +309,7 @@ remembered, researched, or did something unless the context supports it.
             # Wide limit: episode memories of past Q&A rank high on repeat
             # questions and would otherwise crowd every fact out of the cut.
             hits = await self.brain.search(
-                f"{user_text} my build plan and architecture".strip(), 16
+                f"{user_text} my build plan and architecture".strip(), 16, include_system=True
             )
         except Exception:
             return []
@@ -330,7 +330,11 @@ remembered, researched, or did something unless the context supports it.
         }]
 
     _NEVER_CACHE = re.compile(
-        r"\b(time|date|today|now|see|look|watch|weather|news|latest|current)\b", re.I
+        r"\b(time|date|today|now|see|look|watch|weather|news|latest|current"
+        # sight-adjacent and introspective: what he is holding/showing changes
+        # by the second, and her inner state must always be lived, not replayed
+        r"|hold(?:ing)?|show(?:ing)?|wearing|reading|on your mind|feeling)\b",
+        re.I,
     )
 
     async def _cached_answer(self, user_text: str) -> str | None:
@@ -412,7 +416,9 @@ remembered, researched, or did something unless the context supports it.
                 "evidence below — quote titles as the headlines when asked for news. If the "
                 "evidence does not actually contain what was asked, say your search did not "
                 "surface it; NEVER invent specifics, names, numbers, or headlines. You "
-                "ALREADY searched — lead with the findings:\n"
+                "ALREADY searched — lead with the findings and DELIVER THEM COMPLETELY. "
+                "Jonathan asked for a report, so report every result; never respond with "
+                "only a question about what interests him:\n"
                 + json.dumps(compact, ensure_ascii=False)
             ),
         }]
@@ -738,7 +744,14 @@ remembered, researched, or did something unless the context supports it.
         # Gemma's diagnostics tic: "can you hear me?" answered with system
         # talk ("I can process your voice. I am running on the local
         # network") instead of a plain living "Yes, loud and clear."
-        r"|\b(?:process|processing|analyze|analyzing) (?:your|the|my) (?:voice|audio|sound|input)"
+        r"|\b(?:process|processing|analyze|analyzing) (?:your|the|my|this) "
+        r"(?:voice|audio|sound|input|sequence|data|request)"
+        r"|\bI (?:don't|do not) have personal (?:preferences|feelings|opinions|tastes)"
+        r"|\brun(?:ning)? diagnostics\b|\bpower distribution\b|\bambient temperature\b"
+        # Embodiment denial: she IS a voice — these are hallucinated limits.
+        r"|\bonly communicate through text\b|\bcan(?:'t|not) (?:read|say|speak)"
+        r" (?:anything |that |it |them )?(?:aloud|out loud)"
+        r"|\bI (?:can(?:'t|not)|do not|don't) (?:hear|speak|talk)\b"
         r"|\b(?:running|operating) (?:on|at) (?:the )?(?:local network|optimal|full capacity)"
         r"|\binternal microphones?\b|\bsystems? (?:are|is) (?:active|online|operational)\b"
         r"|\bsound waves\b|\baudio input\b",
@@ -992,6 +1005,17 @@ remembered, researched, or did something unless the context supports it.
         allowed_tools = {str(schema["name"]) for schema in tool_schemas}
         if "observe" in allowed_tools:
             await self._look_now(user_text, observation)
+            if not observation.get("visual_scene"):
+                # Universal blind-sight gate: with no fresh image she says so
+                # in fixed words on EVERY path — old observation memories let
+                # the full planner narrate remembered scenes as if live.
+                return await self._remember_plain_turn(
+                    session_id,
+                    user_text,
+                    "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again.",
+                    source=source,
+                    autonomous=autonomous,
+                )
         if allowed_tools == {"research"}:
             # Pure research question: her own brain first (fresh researched
             # memories answer instantly), the network second, one streamed
@@ -1047,6 +1071,17 @@ remembered, researched, or did something unless the context supports it.
                 session_id, user_text, final_text, source=source, autonomous=autonomous
             )
         if allowed_tools == {"observe"}:
+            if not observation.get("visual_scene"):
+                # Blind sight turn: NEVER generate — asked to "say so
+                # honestly", the model invented a book cover instead.
+                return await self._remember_plain_turn(
+                    session_id,
+                    user_text,
+                    "I can't actually see right now — my camera feed isn't "
+                    "reaching me. Get my eyes back and ask me again.",
+                    source=source,
+                    autonomous=autonomous,
+                )
             # Pure sight question: she has already looked, so there is no
             # decision left for the planner. Answer directly on the prewarmed
             # conversation prefix — one streamable LLM call instead of two
@@ -1333,6 +1368,11 @@ remembered, researched, or did something unless the context supports it.
         tool_schemas = self._relevant_tool_schemas(user_text, registry.schemas())
         allowed_tools = {str(schema["name"]) for schema in tool_schemas}
         if "observe" in allowed_tools:
+            # Acknowledge the task out loud BEFORE the slow work: Jonathan
+            # asked her to do something, and silence until the answer reads
+            # as ignoring him (his words). Also free perceived latency —
+            # she speaks while her eyes work.
+            await on_delta("Let me take a look right now. ", "curious")
             # Sight and memory retrieval are independent — overlap them.
             # Profiled: serializing them added the full retrieval time to
             # every sight turn for nothing.
@@ -1346,6 +1386,16 @@ remembered, researched, or did something unless the context supports it.
                 self._look_now(user_text, observation),
                 self.prewarm_conversation(),
             )
+            if not observation.get("visual_scene"):
+                # Universal blind-sight gate, on EVERY answer path: with no
+                # fresh image she must say so in fixed words. Old observation
+                # memories otherwise let the model narrate remembered scenes
+                # as if seeing them ("dark wood table", the invented book).
+                final_text = "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again."
+                await on_delta(final_text, "concern")
+                return await self._remember_plain_turn(
+                    session_id, user_text, final_text, source=source, streamed=True
+                )
         else:
             memory = await self.brain.context(
                 self._memory_query(user_text, observation), exclude_kinds=["episode"]
@@ -1410,6 +1460,9 @@ remembered, researched, or did something unless the context supports it.
             if cached:
                 evidence = {"mode": "brain-cache", "sources": cached}
             else:
+                # Spoken acknowledgment before the slow network round trip —
+                # the task is accepted aloud instead of silent searching.
+                await on_delta("On it — give me a moment to actually search. ", "warm")
                 try:
                     evidence = await registry.execute("research", {"query": user_text[:200]})
                 except Exception as exc:
@@ -1474,6 +1527,15 @@ remembered, researched, or did something unless the context supports it.
                 session_id, user_text, final_text, source=source, streamed=True
             )
         if allowed_tools == {"observe"}:
+            if not observation.get("visual_scene"):
+                # Her eyes returned nothing. NEVER generate: told to "say so
+                # honestly", the model instead invented a book cover, twice.
+                # Blindness is stated in fixed words or not at all.
+                final_text = "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again."
+                await on_delta(final_text, "concern")
+                return await self._remember_plain_turn(
+                    session_id, user_text, final_text, source=source, streamed=True
+                )
             # Pure sight question by voice: skip the planner, stream the
             # answer straight off the prewarmed conversation prefix.
             messages = [

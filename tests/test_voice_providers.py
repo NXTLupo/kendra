@@ -18,13 +18,15 @@ def _with(settings: Settings, key: str, value: str) -> Settings:
     return settings
 
 
-def test_tts_defaults_to_piper(settings: Settings) -> None:
-    assert isinstance(create_tts(settings), PiperTTS)
-
-
-def test_tts_kokoro_selectable(settings: Settings) -> None:
-    _with(settings, "voice.tts.provider", "kokoro_onnx")
+def test_tts_defaults_to_kokoro(settings: Settings) -> None:
+    # Jonathan adopted Kokoro as her voice on 2026-08-19 after A/B listening.
     assert isinstance(create_tts(settings), KokoroTTS)
+
+
+def test_tts_piper_selectable(settings: Settings) -> None:
+    # Piper stays the instant rollback and the Pi qualification fallback.
+    _with(settings, "voice.tts.provider", "piper")
+    assert isinstance(create_tts(settings), PiperTTS)
 
 
 def test_tts_unknown_provider_is_loud(settings: Settings) -> None:

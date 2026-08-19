@@ -566,7 +566,11 @@ class VisionService:
                 ],
                 max_tokens=30,
                 temperature=0.8,
-                id_slot=0,
+                # Slot 1 (planner/tools), NEVER slot 0: this tiny prompt on
+                # the conversation slot evicted the cached 1347-token prefix,
+                # and every turn after an ambient question re-paid an 18-52s
+                # full prefill. Measured post-reboot 2026-08-19.
+                id_slot=1,
             )).strip().strip('"')
             if not question or "?" not in question:
                 return

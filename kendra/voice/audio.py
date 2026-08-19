@@ -189,6 +189,7 @@ class LocalAudioCapture:
         output: Path,
         start_timeout: float | None = None,
         threshold_multiplier: float = 1.0,
+        on_speech_start=None,
     ) -> Path:
         self._ensure_device()
         sd = self._sd()
@@ -234,6 +235,14 @@ class LocalAudioCapture:
                     if not speech_started:
                         frames.extend(preroll)
                         preroll.clear()
+                        if on_speech_start is not None:
+                            # Jonathan started talking: kill the thinking
+                            # blips instantly — tones over his voice read as
+                            # her not listening.
+                            try:
+                                on_speech_start()
+                            except Exception:
+                                pass
                     speech_started = True
                     silent_duration = 0.0
                     frames.append(raw)

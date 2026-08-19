@@ -200,7 +200,11 @@ export default function Home() {
   const eyeStreamRef = useRef<MediaStream | null>(null);
   const pushFrameRef = useRef<(() => Promise<void>) | null>(null);
   useEffect(() => {
-    if (!online || !visionReady) return;
+    // Gate only on the app being online: gating on visionReady tore the
+    // stream down whenever the vision service restarted, and it never came
+    // back — her eyes went dark for good until an app relaunch. Frames sent
+    // to a briefly-dead service fail harmlessly and resume on their own.
+    if (!online) return;
     let cancelled = false;
     const video = document.createElement("video");
     video.muted = true;

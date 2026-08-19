@@ -242,7 +242,15 @@ class KokoroTTS:
             text, voice=self.voice, speed=1.0 / (profile.length_scale * self.pitch), lang="en-us"
         )
         samples = np.clip(samples * profile.volume, -1.0, 1.0)
-        return (samples * 32767.0).astype(np.int16), int(round(sample_rate * self.pitch))
+        if self.pitch != 1.0:
+            # Pitch by resampling the AUDIO, never the playback rate: opening
+            # CoreAudio output at a non-standard rate (24000 x 1.20 = 28800)
+            # wedged AUHAL process-wide — every microphone open after it
+            # failed with -10851 until the service restarted. Playback stays
+            # at Kokoro's native rate on every platform.
+            positions = np.arange(0, samples.shape[0], self.pitch)
+            samples = np.interp(positions, np.arange(samples.shape[0]), samples)
+        return (samples * 32767.0).astype(np.int16), int(sample_rate)
 
     def _speak_blocking(self, text: str, affect: str | None) -> None:
         try:

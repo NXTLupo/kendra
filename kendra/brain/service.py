@@ -53,6 +53,7 @@ class BrainService:
                 str(params["query"]),
                 limit=int(params.get("limit", 10)),
                 kinds=params.get("kinds"),
+                include_system=bool(params.get("include_system", False)),
             )
             return [hit.as_dict() for hit in hits]
         if method == "context":
@@ -286,8 +287,12 @@ class BrainClient:
         )
         return int(result["memory_id"])
 
-    async def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        return await self.rpc.call("search", {"query": query, "limit": limit})
+    async def search(
+        self, query: str, limit: int = 10, include_system: bool = False
+    ) -> list[dict[str, Any]]:
+        return await self.rpc.call(
+            "search", {"query": query, "limit": limit, "include_system": include_system}
+        )
 
     async def begin_session(self, session_id: str, context: str | None = None) -> None:
         await self.rpc.call("begin_session", {"session_id": session_id, "context": context})

@@ -56,6 +56,23 @@ class UnixJsonServer:
     async def start(self) -> None:
         self.socket_path.parent.mkdir(parents=True, exist_ok=True)
         if self.socket_path.exists():
+            # Single-instance enforcement: if a live server already answers
+            # on this socket, REFUSE to start instead of silently stealing
+            # the path. Stolen sockets left orphaned duplicates running —
+            # twice they fought over the microphone and Kendra went deaf.
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_unix_connection(str(self.socket_path)), timeout=1.5
+                )
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+                raise RuntimeError(
+                    f"A live service already owns {self.socket_path}; refusing to start "
+                    "a duplicate. Stop the running instance first."
+                )
+            except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
+                pass  # stale socket from a dead process — safe to reclaim
             self.socket_path.unlink()
         self.server = await asyncio.start_unix_server(
             self._client, path=str(self.socket_path), limit=16 * 1024 * 1024

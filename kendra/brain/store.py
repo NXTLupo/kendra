@@ -248,6 +248,7 @@ class BrainStore:
         *,
         limit: int = 10,
         kinds: Iterable[str] | None = None,
+        include_system: bool = False,
     ) -> list[SearchHit]:
         query = query.strip()
         if not query:
@@ -272,6 +273,11 @@ class BrainStore:
                 for row in rows:
                     if kinds_set and row["kind"] not in kinds_set:
                         continue
+                    if not include_system and row["provenance"] == "system":
+                        # Her build/architecture docs answer build questions
+                        # via the deterministic route only; in general recall
+                        # they made idle chat ruminate about chassis phases.
+                        continue
                     mid = int(row["id"])
                     candidate_rows[mid] = row
                     lexical_rank[mid] = float(row["rank"])
@@ -283,6 +289,8 @@ class BrainStore:
         ).fetchall()
         for row in recent:
             if kinds_set and row["kind"] not in kinds_set:
+                continue
+            if not include_system and row["provenance"] == "system":
                 continue
             candidate_rows.setdefault(int(row["id"]), row)
 

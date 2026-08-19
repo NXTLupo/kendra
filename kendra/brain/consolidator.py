@@ -189,6 +189,7 @@ KENDRA RESPONSE FOR CONTEXT ONLY; DO NOT TREAT AS EVIDENCE:
         rows = self.store.conn.execute(
             """SELECT id, kind, content FROM memories
                WHERE active=1 AND kind NOT IN ('episode')
+                 AND provenance != 'system'
                ORDER BY id DESC LIMIT 20"""
         ).fetchall()
         if len(rows) < 6:

@@ -213,6 +213,12 @@ class VoiceService:
                 interrupted.set()
                 producer.cancel()
                 break
+            if queue.empty() and not producer.done():
+                # She spoke an acknowledgment (or a phrase) and the slow
+                # work continues: bring the thinking blips back so the wait
+                # never reads as a hang. They stop when the next phrase
+                # speaks or when Jonathan starts talking.
+                self.thinking_sounds.cue()
 
         if was_interrupted:
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -235,7 +241,11 @@ class VoiceService:
             prewarm = asyncio.create_task(self.streaming_agent.prewarm_conversation())
             prewarm.add_done_callback(lambda _t: None)
             await asyncio.to_thread(
-                self.audio.capture_utterance, wav, start_timeout, threshold_multiplier
+                self.audio.capture_utterance,
+                wav,
+                start_timeout,
+                threshold_multiplier,
+                self.thinking_sounds.stop,
             )
             # She heard you: acknowledge instantly while ASR and the LLM run —
             # but only when speech was actually captured. Acknowledging a
