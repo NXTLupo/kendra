@@ -1130,8 +1130,12 @@ remembered, researched, or did something unless the context supports it.
                 return await self._remember_plain_turn(
                     session_id,
                     user_text,
-                    "I can't actually see right now — my camera feed isn't "
-                    "reaching me. Get my eyes back and ask me again.",
+                    (
+                        "My deep sight is still waking up — give me a few seconds and ask me again."
+                        if "processing" in str(observation.get("visual_scene_error") or "")
+                        else "I can't actually see right now — my camera feed isn't "
+                        "reaching me. Get my eyes back and ask me again."
+                    ),
                     source=source,
                     autonomous=autonomous,
                 )
@@ -1462,7 +1466,11 @@ remembered, researched, or did something unless the context supports it.
                 # fresh image she must say so in fixed words. Old observation
                 # memories otherwise let the model narrate remembered scenes
                 # as if seeing them ("dark wood table", the invented book).
-                final_text = "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again."
+                final_text = (
+                    "My deep sight is still waking up — give me a few seconds and ask me again."
+                    if "processing" in str(observation.get("visual_scene_error") or "")
+                    else "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again."
+                )
                 await on_delta(final_text, "concern")
                 return await self._remember_plain_turn(
                     session_id, user_text, final_text, source=source, streamed=True
@@ -1626,7 +1634,11 @@ remembered, researched, or did something unless the context supports it.
                 # Her eyes returned nothing. NEVER generate: told to "say so
                 # honestly", the model instead invented a book cover, twice.
                 # Blindness is stated in fixed words or not at all.
-                final_text = "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again."
+                final_text = (
+                    "My deep sight is still waking up — give me a few seconds and ask me again."
+                    if "processing" in str(observation.get("visual_scene_error") or "")
+                    else "I can't actually see right now — my camera feed isn't reaching me. Get my eyes back and ask me again."
+                )
                 await on_delta(final_text, "concern")
                 return await self._remember_plain_turn(
                     session_id, user_text, final_text, source=source, streamed=True
