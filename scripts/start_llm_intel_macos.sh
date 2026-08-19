@@ -6,7 +6,7 @@ SERVER="third_party/llama.cpp/build/bin/llama-server"
 SOURCE_MODEL="models/qwen3-1.7b/Qwen3-1.7B-Q8_0.gguf"   # pinned distribution artifact
 # Gemma 4 E2B: brain AND eyes in one model (mmproj below). Qwen3-1.7B and
 # Moondream stay on disk for one-line rollback via KENDRA_LLM_MODEL.
-MODEL="${KENDRA_LLM_MODEL:-models/gemma4-e2b/gemma-4-E2B-it-Q4_0.gguf}"
+MODEL="${KENDRA_LLM_MODEL:-models/qwen3-kendra-v1/qwen3-1.7b.Q4_K_M.gguf}"
 MMPROJ="models/gemma4-e2b/mmproj-gemma-4-E2B-it-Q8_0.gguf"
 if [ ! -x "$SERVER" ]; then
   echo "Missing llama-server: $SERVER. Run scripts/bootstrap_intel_macos.sh first." >&2
