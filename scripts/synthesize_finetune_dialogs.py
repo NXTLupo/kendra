@@ -135,7 +135,24 @@ def main() -> int:
     started = time.time()
     with httpx.Client() as client, synthetic_path.open("a", encoding="utf-8") as fh:
         misses = 0
+        con = None
+        try:
+            import sqlite3
+            con = sqlite3.connect(str(ROOT / "data" / "kendra-brain.db"))
+        except Exception:
+            pass
         while len(synthetic) < need and misses < need * 4:
+            # HALF-DUPLEX LAW: this script once ran during live conversation
+            # and every spoken turn queued behind it (36s first-audio).
+            # Generate ONLY when Kendra has been idle for 3+ minutes.
+            if con is not None:
+                row = con.execute(
+                    "SELECT (julianday('now') - julianday(MAX(created_at))) * 86400 FROM turns"
+                ).fetchone()
+                idle = float(row[0] or 1e9)
+                if idle < 180:
+                    time.sleep(30)
+                    continue
             scenario = random.choice(SCENARIOS)
             exemplars = random.sample(curated, k=min(3, len(curated)))
             pair = generate_one(client, scenario, exemplars)

@@ -220,8 +220,13 @@ class LocalAudioCapture:
             channels=1,
             dtype="int16",
         ) as stream:
+            overflow_blocks = 0
             while time.monotonic() < absolute_deadline:
                 data, _overflowed = stream.read(block)
+                if _overflowed:
+                    # Starved CPU = dropped audio = garbage transcripts.
+                    # Count and report instead of silently mangling speech.
+                    overflow_blocks += 1
                 raw = bytes(data)
                 pcm = np.frombuffer(raw, dtype=np.int16)
                 _, block_peak = _mean_rms(pcm, block=len(pcm) or 1)
@@ -256,6 +261,12 @@ class LocalAudioCapture:
                 else:
                     preroll.append(raw)
 
+        if overflow_blocks:
+            LOG.warning(
+                "Audio capture dropped %d blocks (CPU starvation) — "
+                "transcription of this utterance is unreliable",
+                overflow_blocks,
+            )
         self.last_capture_speech = speech_started
         self.last_capture_peak = peak
         if speech_started:
