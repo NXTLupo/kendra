@@ -1224,6 +1224,20 @@ remembered, researched, or did something unless the context supports it.
                     id_slot=self.CONVERSATION_SLOT,
                 )
             ).strip() or "Nothing surfaced from memory."
+            final_text = await self._dedup_reply(
+                final_text,
+                lambda: self.llm.chat(
+                    [
+                        {"role": "system", "content": self._conversation_prompt()},
+                        {"role": "system", "content": "You already said your previous reply. Answer the CURRENT question freshly from the memory note; never repeat earlier replies."},
+                        {"role": "system", "content": note},
+                        {"role": "user", "content": user_text},
+                    ],
+                    max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
+                    temperature=0.9,
+                    id_slot=self.CONVERSATION_SLOT,
+                ),
+            )
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, autonomous=autonomous
             )
@@ -1335,7 +1349,21 @@ remembered, researched, or did something unless the context supports it.
                     max_tokens=int(self.settings.get("llm.conversation_max_tokens", 200)),
                 id_slot=self.CONVERSATION_SLOT,
                 )
-            ).strip() or "My eyes did not give me anything useful just now."
+            ).strip()
+            final_text = await self._dedup_reply(
+                final_text,
+                lambda: self.llm.chat(
+                    [
+                        {"role": "system", "content": self._conversation_prompt()},
+                        {"role": "system", "content": "You already said your previous reply. Answer the CURRENT question freshly; never repeat earlier replies."},
+                        *self._scene_note(observation),
+                        {"role": "user", "content": user_text},
+                    ],
+                    max_tokens=int(self.settings.get("llm.conversation_max_tokens", 200)),
+                    temperature=0.9,
+                    id_slot=self.CONVERSATION_SLOT,
+                ),
+            ) or "My eyes did not give me anything useful just now."
             if _timings is not None:
                 _timings["answer_s"] = round(time.monotonic() - _answer_started, 1)
             _dedup_started = time.monotonic()
