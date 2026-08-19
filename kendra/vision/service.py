@@ -570,7 +570,7 @@ class VisionService:
             )).strip().strip('"')
             if not question or "?" not in question:
                 return
-            await self._comment(question)
+            await self._comment(question, listen_after=True)
             await BrainClient(self.settings).remember(
                 kind="kendra_opinion",
                 content=("I found myself wondering: " + question)[:200],
@@ -581,12 +581,22 @@ class VisionService:
         except Exception:
             LOG.debug("Curious question unavailable", exc_info=True)
 
-    async def _comment(self, text: str) -> None:
+    async def _comment(self, text: str, listen_after: bool = False) -> None:
         """Speak a short movement comment aloud — politely (never over an
-        active conversation), and never fatally (voice down = silent walk)."""
+        active conversation), and never fatally (voice down = silent walk).
+        With listen_after, her ears open for a reply: her own questions must
+        never require the wake word to answer."""
         try:
             voice = UnixJsonClient(self.settings.runtime_dir / "voice.sock", timeout=30)
-            result = await voice.call("speak", {"text": text[:200], "affect": "curious", "only_if_idle": True})
+            result = await voice.call(
+                "speak",
+                {
+                    "text": text[:200],
+                    "affect": "curious",
+                    "only_if_idle": True,
+                    "listen_after": listen_after,
+                },
+            )
             LOG.info("Movement comment (%s): %s", result.get("ok"), text[:80])
         except Exception:
             LOG.debug("Movement comment unavailable", exc_info=True)

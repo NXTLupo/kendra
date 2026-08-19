@@ -113,6 +113,11 @@ class VoiceService:
         # robot profile keeps it on.
         if not self.stop_enabled or not bool(self.settings.get("voice.barge_in_monitor", True)):
             await self.tts.speak(text, affect=affect)
+            # Playback is over: replace the length-based estimate with the
+            # truth plus a short mic-tail guard. The estimate ran long and
+            # ate her listening window, or ran short and let her own voice
+            # be transcribed as Jonathan.
+            self._speaking_until = time.time() + 0.6
             return False
         cancel = threading.Event()
         monitor = asyncio.create_task(
@@ -131,6 +136,7 @@ class VoiceService:
             await speech
         if not monitor.done():
             await monitor
+        self._speaking_until = time.time() + 0.6
         return interrupted
 
     async def _stream_and_speak(self, user_text: str) -> dict[str, Any]:
@@ -309,9 +315,12 @@ class VoiceService:
         result = await self.one_turn()
         if not bool(self.settings.get("voice.followup.enabled", True)):
             return
-        base_window = float(self.settings.get("voice.followup.window_seconds", 6.0))
-        question_window = float(self.settings.get("voice.followup.question_window_seconds", 12.0))
-        max_turns = int(self.settings.get("voice.followup.max_turns", 8))
+        await self._followup_loop(result)
+
+    async def _followup_loop(self, result: dict[str, Any]) -> None:
+        base_window = float(self.settings.get("voice.followup.window_seconds", 10.0))
+        question_window = float(self.settings.get("voice.followup.question_window_seconds", 20.0))
+        max_turns = int(self.settings.get("voice.followup.max_turns", 40))
         # Follow-up capture demands clearly deliberate speech: ambient noise
         # and music sit near the base threshold and once self-triggered a
         # window loop where Kendra conversed with the stereo indefinitely.
@@ -429,6 +438,15 @@ class VoiceService:
                 # talk over an active conversation — charter social conduct.
                 return {"ok": False, "reason": "conversation_active"}
             await self._speak_with_barge_in(text, str(params.get("affect", "warm")))
+            if bool(params.get("listen_after")):
+                # She just spoke to someone unprompted (a curious question):
+                # her ears open for the answer — Jonathan must never need
+                # the wake word to reply to her own question.
+                task = asyncio.create_task(
+                    self._followup_loop({"heard": "(kendra spoke first)", "response": text}),
+                    name="kendra-listen-after-speech",
+                )
+                task.add_done_callback(lambda _t: None)
             return {"ok": True}
         if method == "busy":
             # Is a conversation live right now? Ambient vision asks before

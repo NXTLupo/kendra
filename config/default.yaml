@@ -288,9 +288,9 @@ voice:
     # listening this long for a follow-up (longer when she asked a question),
     # then returns to wake-word listening on silence.
     enabled: true
-    window_seconds: 6.0
-    question_window_seconds: 12.0
-    max_turns: 8
+    window_seconds: 10.0
+    question_window_seconds: 20.0
+    max_turns: 40
     # follow-up speech must clearly exceed ambient; 1.8x the calibrated floor
     threshold_multiplier: 1.8
   streaming:
