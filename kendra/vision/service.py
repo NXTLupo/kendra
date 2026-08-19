@@ -341,6 +341,14 @@ class VisionService:
             response = await client.post(str(endpoint).rstrip("/") + "/chat/completions", json=payload)
             response.raise_for_status()
         description = str(response.json()["choices"][0]["message"]["content"])
+        # She looks at the world, not at "an image": strip meta-framing so
+        # downstream speech talks about the subject directly.
+        description = re.sub(
+            r"^\s*(?:in\s+)?(?:the|this)\s+(?:image|picture|photo|frame|scene)\s*(?:,|shows|features|depicts|is of|there is|there are)?\s*",
+            "",
+            description,
+            flags=re.I,
+        ) or description
         if not hasattr(self, "_semantic_cache"):
             self._semantic_cache: dict[str, str] = {}
         if len(self._semantic_cache) > 32:
@@ -486,7 +494,9 @@ class VisionService:
                 )
             except Exception:
                 LOG.debug("Post-move look unavailable", exc_info=True)
-            comment = "Taking a closer look."
+            # Her thoughts are shared WITH Jonathan, not narrated to herself:
+            # second-person, conversational, no scene-report framing.
+            comment = "Something caught my eye — coming in for a closer look."
             seen = ""
             if after:
                 seen = str(after.get("description") or "").strip()
@@ -497,13 +507,12 @@ class VisionService:
                     if isinstance(p, dict) and p.get("status") == "recognized" and p.get("display_name")
                 ]
                 people = int(after.get("people_in_view") or 0)
-                pieces = [first_sentence] if first_sentence else []
                 if names:
-                    pieces.append("Good to see you, " + names[0] + ".")
+                    comment = f"Hey {names[0]} — couldn't help coming over."
                 elif people:
-                    pieces.append(f"I can see {'someone' if people == 1 else str(people) + ' people'} here.")
-                if pieces:
-                    comment = "Taking a closer look. " + " ".join(pieces)
+                    comment = "Couldn't help noticing you — I came over for a better look."
+                elif first_sentence:
+                    comment = "Something changed over here — " + first_sentence[0].lower() + first_sentence[1:]
             await self._comment(comment)
             # Unprompted curiosity: one short question about what she found —
             # about the person when someone is here (she is social and drawn

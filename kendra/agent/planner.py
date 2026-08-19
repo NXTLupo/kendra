@@ -405,6 +405,8 @@ remembered, researched, or did something unless the context supports it.
                 "content": (
                     "WHAT YOUR EYES SEE RIGHT NOW (answer sight questions from this "
                     "and nothing else; if visual_scene_error is set, say so honestly). You ALREADY looked — lead with what you see. "
+                    "Speak about it directly: never say 'the image', 'the picture', or 'I can see the image' — you are looking at the real world. "
+                    "If the person you see is the one talking to you, address them as 'you', never as 'he', 'she', or 'the man'. "
                     "For fine counts (fingers, small objects, text) give your best reading and admit it may be off by one — your camera resolution is limited:\n"
                     + json.dumps(scene, ensure_ascii=False)
                 ),

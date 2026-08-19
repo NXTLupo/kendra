@@ -6,6 +6,7 @@ import logging
 import re
 import tempfile
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -93,6 +94,16 @@ class VoiceService:
         """Speak locally while listening for Kendra's secondary spoken stop."""
 
         self.thinking_sounds.stop()
+        # Self-echo ledger: everything she says is remembered briefly so her
+        # own voice, picked up by her own microphone, can never become a
+        # "user" turn. (Her ambient comment was once transcribed as Jonathan
+        # saying "Taking Sir Look, the image shows a man...".)
+        ledger = getattr(self, "_spoken_ledger", None)
+        if ledger is None:
+            ledger = self._spoken_ledger = []
+        ledger.append((time.time(), text))
+        del ledger[:-8]
+        self._speaking_until = time.time() + max(2.0, len(text) * 0.07) + 1.0
 
         # The per-phrase stop monitor opens a fresh CoreAudio input stream for
         # every sentence Kendra speaks — the main source of intermittent
@@ -232,6 +243,16 @@ class VoiceService:
                 user_text,
                 [str(self.settings.get("voice.wake.phrase", "kendra")).casefold()],
             )
+            import difflib
+
+            for spoken_at, spoken in getattr(self, "_spoken_ledger", []):
+                if time.time() - spoken_at > 45:
+                    continue
+                if difflib.SequenceMatcher(
+                    None, user_text.casefold(), spoken.casefold()
+                ).ratio() > 0.55:
+                    LOG.info("Discarded self-echo transcript: %r", user_text[:60])
+                    return {"heard": "", "response": ""}
             lowered = user_text.strip().lower().rstrip(".!")
             if lowered in {"that's all", "thats all", "thanks kendra", "thank you kendra", "go to sleep", "goodnight", "good night", "we're done", "that will be all"}:
                 await self._speak_with_barge_in("Okay.", "warm")
@@ -340,6 +361,9 @@ class VoiceService:
                 )
                 self._wake_failures = 0
                 if event == "cancel":
+                    continue
+                if time.time() < getattr(self, "_speaking_until", 0.0):
+                    # That was her own voice reaching her own microphone.
                     continue
                 if event == "stop":
                     await self._spoken_stop("spoken stop wake detector")
