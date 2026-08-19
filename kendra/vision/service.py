@@ -544,7 +544,10 @@ class VisionService:
             ):
                 try:
                     voice = UnixJsonClient(self.settings.runtime_dir / "voice.sock", timeout=10)
-                    started = await voice.call("meet_person", {})
+                    # Ship the description her approach just produced: the
+                    # meet ritual's "noticing" question reuses it instead of
+                    # paying a second 16-40s deep look mid-conversation.
+                    started = await voice.call("meet_person", {"noticed": seen[:280]})
                     LOG.info("Meet ritual: %s", started)
                     if started.get("ok"):
                         self._last_meet_at = time.time()

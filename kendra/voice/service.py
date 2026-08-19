@@ -441,7 +441,7 @@ class VoiceService:
                 self._manual_capture_active.clear()
                 self._wake_cancel.clear()
 
-    async def _meet_person(self) -> dict[str, Any]:
+    async def _meet_person(self, noticed: str = "") -> dict[str, Any]:
         """Her reflex when an unfamiliar face appears: walk over (the vision
         service already did), introduce herself, learn the name, celebrate,
         and remember the person everywhere — identity, brain, second brain."""
@@ -469,24 +469,33 @@ class VoiceService:
                 )
             except Exception:
                 LOG.debug("Meet flourish (%s) unavailable", sock, exc_info=True)
-        enroll: dict[str, Any] = {}
-        try:
-            vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=90)
-            enroll = await vision.call(
-                "enroll_person",
-                {"name": name, "consent": True, "relationship": "met in person"},
-            )
-        except Exception:
-            LOG.exception("Meet ritual: face enrollment failed for %s", name)
-        try:
-            brain = UnixJsonClient(self.settings.runtime_dir / "brain.sock", timeout=10)
-            await brain.call(
-                "meet_person",
-                {"name": name, "person_uid": (enroll or {}).get("person_uid")},
-            )
-        except Exception:
-            LOG.exception("Meet ritual: brain storage failed for %s", name)
-        LOG.info("Meet ritual complete: %s (%s)", name, enroll.get("person_uid"))
+        async def enroll_and_store() -> None:
+            # The 8 spaced captures (~10s) and storage run BEHIND the
+            # conversation — blocking on them left a painful silent stall
+            # right after "nice to meet you". Her eyes learn the face while
+            # her mouth keeps talking; the person naturally stays in frame.
+            enroll: dict[str, Any] = {}
+            try:
+                vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=90)
+                enroll = await vision.call(
+                    "enroll_person",
+                    {"name": name, "consent": True, "relationship": "met in person"},
+                )
+            except Exception:
+                LOG.exception("Meet ritual: face enrollment failed for %s", name)
+            try:
+                brain = UnixJsonClient(self.settings.runtime_dir / "brain.sock", timeout=10)
+                await brain.call(
+                    "meet_person",
+                    {"name": name, "person_uid": (enroll or {}).get("person_uid")},
+                )
+            except Exception:
+                LOG.exception("Meet ritual: brain storage failed for %s", name)
+            LOG.info("Meet ritual storage complete: %s (%s)", name, enroll.get("person_uid"))
+
+        enroll_task = asyncio.create_task(enroll_and_store(), name="kendra-meet-enroll")
+        enroll_task.add_done_callback(lambda _t: None)
+        LOG.info("Meet ritual conversation continuing with %s", name)
         # She is inquisitive by nature: try to NOTICE something about the
         # person — clothing, an item, an instrument — and ask about that.
         # Falls back to warm small talk when her eyes or the model come up
@@ -494,12 +503,6 @@ class VoiceService:
         # cache (slot 0 is sacred).
         question = None
         try:
-            vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=45)
-            look = await vision.call(
-                "observe",
-                {"semantic": True, "question": "Briefly describe this person's appearance and anything notable they are wearing or holding."},
-            )
-            noticed = str((look or {}).get("description") or "").strip()
             if noticed:
                 candidate = (await self.streaming_agent.llm.chat(
                     [
@@ -526,7 +529,7 @@ class VoiceService:
             ])
         await self._speak_with_barge_in(question, "curious")
         await self._followup_loop({"heard": f"(just met {name})", "response": question})
-        return {"ok": True, "name": name, **enroll}
+        return {"ok": True, "name": name}
 
     async def desktop_capture_begin(self) -> dict[str, Any]:
         """Yield the microphone to the native desktop renderer."""
@@ -602,7 +605,10 @@ class VoiceService:
             # when a conversation is already happening.
             if self._capture_lock.locked() or self._manual_capture_active.is_set():
                 return {"ok": False, "reason": "conversation_active"}
-            task = asyncio.create_task(self._meet_person(), name="kendra-meet-person")
+            task = asyncio.create_task(
+                self._meet_person(str(params.get("noticed") or "")),
+                name="kendra-meet-person",
+            )
             task.add_done_callback(lambda _t: None)
             return {"ok": True, "started": True}
         if method == "speak":
