@@ -191,6 +191,11 @@ class KokoroTTS:
             settings.root,
         )
         self.voice = str(settings.get("voice.tts.kokoro_voice", "af_heart"))
+        # Cuteness knob: raises pitch (and pace equally) by playing the
+        # synthesized audio at a scaled sample rate — the classic "small
+        # creature" effect, zero extra CPU, so it is free on the Pi too.
+        # 1.0 = as synthesized; Jonathan's pick after listening: ~1.12.
+        self.pitch = float(settings.get("voice.tts.kokoro_pitch", 1.0))
         self.default_affect = str(settings.get("voice.tts.default_affect", "warm"))
         self._engine: Any | None = None
         self._load_lock = threading.Lock()
@@ -231,11 +236,13 @@ class KokoroTTS:
         profile = self._profile(affect)
         # Kokoro has no VITS-style noise knobs; affect maps to pace (the
         # inverse of Piper's length_scale) and playback gain.
+        # Synthesis is slowed by the pitch factor so the rate-scaled playback
+        # raises pitch while her pace stays natural (not chipmunk-fast).
         samples, sample_rate = engine.create(
-            text, voice=self.voice, speed=1.0 / profile.length_scale, lang="en-us"
+            text, voice=self.voice, speed=1.0 / (profile.length_scale * self.pitch), lang="en-us"
         )
         samples = np.clip(samples * profile.volume, -1.0, 1.0)
-        return (samples * 32767.0).astype(np.int16), sample_rate
+        return (samples * 32767.0).astype(np.int16), int(round(sample_rate * self.pitch))
 
     def _speak_blocking(self, text: str, affect: str | None) -> None:
         try:

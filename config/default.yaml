@@ -253,6 +253,8 @@ voice:
     kokoro_model: ./models/kokoro/kokoro-v1.0.onnx
     kokoro_voices: ./models/kokoro/voices-v1.0.bin
     kokoro_voice: af_heart
+    # Pitch scale: >1.0 raises her pitch (pace auto-compensated). Zero-CPU.
+    kokoro_pitch: 1.12
     player: sounddevice
     chunk_chars: 180
     default_affect: warm
