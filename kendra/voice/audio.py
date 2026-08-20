@@ -269,7 +269,16 @@ class LocalAudioCapture:
                 elif speech_started:
                     frames.append(raw)
                     silent_duration += block / self.sample_rate
-                    if silent_duration >= self.silence_seconds:
+                    # Dynamic endpointing (latency spec rec #4): a fixed 0.8s
+                    # trailing silence taxes EVERY turn. Once he has clearly
+                    # said something (>1.2s of speech), 0.45s of silence is
+                    # decisive; only short fragments keep the longer window
+                    # so mid-sentence breaths don't cut him off.
+                    spoken_seconds = len(frames) * block / self.sample_rate
+                    window = self.silence_seconds if spoken_seconds < 1.2 else max(
+                        0.45, self.silence_seconds * 0.55
+                    )
+                    if silent_duration >= window:
                         break
                 elif time.monotonic() >= speech_start_deadline:
                     break
