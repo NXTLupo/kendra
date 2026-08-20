@@ -706,6 +706,41 @@ remembered, researched, or did something unless the context supports it.
         re.I,
     )
 
+    async def _sight_grounding_guard(self, answer: str, observation: dict[str, Any],
+                                     user_text: str, regenerate) -> str:
+        """A sight answer may only contain what her eyes actually reported.
+
+        ONE mechanism for every visual topic — no per-question tables. Her
+        eyes produce a description; that description is the evidence; the
+        same verifier used for research checks that every specific in her
+        answer appears in it. That single rule covers fingers she cannot
+        see, cigarettes that do not exist, and whatever the next surprise
+        is, without anyone hand-writing a case for it.
+        """
+        scene = str(observation.get("visual_scene") or "").strip()
+        if not scene or not answer:
+            return answer
+        evidence = {"sources": [{"title": "what my eyes reported", "snippet": scene}]}
+        # People presence is a measured fact, so it counts as evidence too.
+        if observation.get("people_in_view") is not None:
+            evidence["sources"].append({
+                "title": "face detector",
+                "snippet": f"{observation.get('people_in_view')} people detected; "
+                           f"{', '.join(observation.get('recognized_people_names') or []) or 'nobody recognised'}",
+            })
+        bad = self._ungrounded_claims(answer, evidence, user_text)
+        if not bad:
+            return answer
+        LOG.warning("Ungrounded sight claims %s in: %r", bad[:5], answer[:80])
+        try:
+            fresh = (await regenerate(bad)).strip()
+        except Exception:
+            fresh = ""
+        if fresh and not self._ungrounded_claims(fresh, evidence, user_text):
+            return fresh
+        return ("I had a look, but I can't make that out clearly enough to say. "
+                "Here's what I can see: " + scene[:180])
+
     async def _movement_claim_guard(self, final_text: str, moved: bool, regenerate) -> str:
         """She may never say she moved when her legs never moved.
 
@@ -2592,6 +2627,25 @@ remembered, researched, or did something unless the context supports it.
             if not final_text:
                 final_text = "My eyes did not give me anything useful just now."
                 await on_delta(final_text, "concern")
+            checked = await self._sight_grounding_guard(
+                final_text, observation, user_text,
+                lambda bad: self.llm.chat(
+                    messages + [{
+                        "role": "system",
+                        "content": (
+                            "STOP. Your eyes did not report these and you invented them: "
+                            f"{', '.join(bad[:6])}. Answer using ONLY what the description "
+                            "says. If it does not cover what he asked, say plainly that you "
+                            "cannot make it out."
+                        ),
+                    }],
+                    temperature=0.3,
+                    max_tokens=int(self.settings.get("llm.conversation_max_tokens", 120)),
+                ),
+            )
+            if checked != final_text:
+                await on_delta(" Actually — I can't verify that part.", "concern")
+                final_text = checked
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, streamed=True
             )

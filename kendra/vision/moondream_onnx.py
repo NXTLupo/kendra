@@ -115,6 +115,18 @@ class MoondreamOnnxEye:
         LOG.info("Moondream: %r answered in %.1fs", question[:40], time.time() - started)
         return str(answer).strip()
 
+    def ask_guarded(self, frame_bgr, signature, question: str) -> str:
+        """Kept for interface stability; grounding is enforced generally.
+
+        An earlier version carried a hand-written table of preconditions
+        (fingers, text, ...). That is exactly the use-case-specific coding
+        this project rejects: every new question type would need another
+        entry. Truthfulness is enforced once, generally, by checking her
+        ANSWER against what her eyes actually reported — the same guard used
+        for research evidence.
+        """
+        return self.ask(frame_bgr, signature, question)
+
     def caption(self, frame_bgr, signature) -> str:
         """A short scene caption. Kept brief: long free-form output invents."""
         return self.ask(frame_bgr, signature, "Describe this image in one sentence.")

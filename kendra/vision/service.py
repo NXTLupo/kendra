@@ -422,7 +422,7 @@ class VisionService:
             import asyncio as _asyncio
 
             signature = self._scene_signature(frame)
-            answer = await _asyncio.to_thread(self.eye.ask, frame, signature, question)
+            answer = await _asyncio.to_thread(self.eye.ask_guarded, frame, signature, question)
             self._remember_scene(frame, question, answer)
             self._last_semantic_at = time.time()
             return answer
@@ -517,30 +517,12 @@ class VisionService:
         except Exception as exc:
             result["recognized_people"] = []
             result["face_recognition_status"] = f"unavailable:{type(exc).__name__}"
-        # PRESENCE GATE. Person-questions presuppose a person, and both eyes
-        # answer the presupposition rather than the image: asked "what is the
-        # person holding" of an EMPTY CHAIR, Moondream 0.5B replied "a guitar
-        # in their hands", then "a black shirt", then "three fingers". YuNet
-        # is authoritative about whether anyone is there, so when it sees
-        # nobody, the question never reaches the language-vision model.
-        person_question = bool(re.search(
-            r"\b(person|people|he|she|they|i|me|my|you|your|holding|wearing|"
-            r"fingers?|hands?|face|smiling|doing)\b",
-            str(question or ""), re.I,
-        ))
-        if semantic and person_question and not people:
-            names = [
-                str(m.get("display_name"))
-                for m in (result.get("recognized_people") or [])
-                if isinstance(m, dict) and m.get("display_name")
-            ]
-            if not names:
-                result["visual_scene"] = (
-                    "No person is visible in the frame right now — the room is empty "
-                    "from where I am looking."
-                )
-                result["people_count_rule"] = "no_person_detected"
-                return result
+        # Whether anyone is actually present is a FACT from YuNet, not an
+        # opinion from the language-vision model. It always travels with the
+        # observation so the answer can be checked against it; no per-topic
+        # rules live here.
+        if semantic and not people and not (result.get("recognized_people") or []):
+            result["people_count_rule"] = "no_person_detected"
         if semantic:
             # ELC addContext pattern, localized: her ambient eyes describe
             # the scene continuously, so a GENERIC sight question can reuse
@@ -892,6 +874,78 @@ class VisionService:
             except Exception:
                 LOG.debug("VLM warm ping skipped", exc_info=True)
 
+    def _purge_photos(self) -> dict[str, int]:
+        """Keep her camera roll bounded, protecting anything referenced.
+
+        Frames accumulate at roughly 13 MB and 65 files per hour of use —
+        fine on a desktop, ruinous on a Pi over months. Rules, in order:
+        never delete a frame another system still points at (an enrolled
+        face sample, a stored memory, a delivery), then keep everything
+        inside the age window, then keep the newest N.
+        """
+        directory = self.photos_dir
+        max_files = int(self.settings.get("vision.photos.max_files", 300))
+        max_age_h = float(self.settings.get("vision.photos.max_age_hours", 24))
+        photos = sorted(directory.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if len(photos) <= max_files and max_age_h <= 0:
+            return {"kept": len(photos), "deleted": 0}
+
+        protected: set[str] = set()
+        for db_name, columns in (
+            ("paths.identity_db", ("capture_context",)),
+            ("paths.brain_db", ("content", "metadata_json")),
+        ):
+            try:
+                import sqlite3
+
+                path = self.settings.path(db_name)
+                if not path.exists():
+                    continue
+                con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                for table_row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall():
+                    table = table_row[0]
+                    for column in columns:
+                        try:
+                            for (value,) in con.execute(
+                                f"SELECT {column} FROM {table} WHERE {column} LIKE '%kendra-2%'"
+                            ):
+                                for photo in photos:
+                                    if photo.stem in str(value):
+                                        protected.add(photo.stem)
+                        except sqlite3.Error:
+                            continue
+                con.close()
+            except Exception:
+                LOG.debug("photo protection scan skipped for %s", db_name, exc_info=True)
+
+        cutoff = time.time() - max_age_h * 3600 if max_age_h > 0 else 0.0
+        deleted = 0
+        for index, photo in enumerate(photos):
+            if photo.stem in protected:
+                continue
+            too_old = cutoff and photo.stat().st_mtime < cutoff
+            beyond_cap = index >= max_files
+            if too_old or beyond_cap:
+                try:
+                    photo.unlink()
+                    deleted += 1
+                except OSError:
+                    pass
+        if deleted:
+            LOG.info("Purged %d old frames (%d protected, %d kept)",
+                     deleted, len(protected), len(photos) - deleted)
+        return {"kept": len(photos) - deleted, "deleted": deleted, "protected": len(protected)}
+
+    async def _photo_purge_loop(self) -> None:
+        while True:
+            try:
+                await asyncio.to_thread(self._purge_photos)
+            except Exception:
+                LOG.debug("photo purge skipped", exc_info=True)
+            await asyncio.sleep(float(self.settings.get("vision.photos.purge_interval_seconds", 600)))
+
     async def _ambient_loop(self) -> None:
         """Her idle gaze: the world she watches becomes memory on its own.
 
@@ -955,6 +1009,8 @@ class VisionService:
         response.raise_for_status()
 
     async def run(self) -> None:
+        purge = asyncio.create_task(self._photo_purge_loop())
+        purge.add_done_callback(lambda _t: None)
         ambient = asyncio.create_task(self._ambient_loop())
         ambient.add_done_callback(lambda _t: None)
         warm = asyncio.create_task(self._warm_vlm())

@@ -235,7 +235,7 @@ export default function Home() {
         eyeStreamRef.current = stream;
         video.srcObject = stream;
         void video.play();
-        timer = window.setInterval(() => void pushFrame(), 5000);
+        timer = window.setInterval(() => void pushFrame(), 2000);
         window.setTimeout(() => void pushFrame(), 1500);
         // Eye watchdog: re-acquire the camera if the track dies (bridge
         // restart, device grab, display sleep). Her eyes once stayed dark

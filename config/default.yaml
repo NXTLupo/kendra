@@ -212,6 +212,13 @@ vision:
     meet_new_people: true
     meet_cooldown_seconds: 300
     check_interval_seconds: 30
+  # Camera roll retention. Measured growth: ~13 MB and ~65 frames per hour
+  # of use, which would bury a Pi over months. Frames referenced by an
+  # enrolled face, a memory or a delivery are never deleted.
+  photos:
+    max_files: 300
+    max_age_hours: 24
+    purge_interval_seconds: 600
   socket: vision.sock
   camera_provider: opencv
   camera_index: 0
