@@ -118,6 +118,12 @@ class AgentRuntime:
         # her researched-memory cache still answers repeats instantly.
         if AgentRuntime._FORCE_RESEARCH.search(user_text):
             selected.add("research")
+        if AgentRuntime._INNER_STATE.search(text):
+            # "How are you feeling right now?" matched the temporal research
+            # marker "right now" and she literally SEARCHED THE WEB for her
+            # own mood, then reported finding nothing. Her interior is never
+            # an internet question.
+            selected.discard("research")
         if re.search(r"\blook (?:up|down)\s*[.!?]?\s*$", text):
             selected.add("look")
         if AgentRuntime._SIGHT_INTENT.search(text):
@@ -980,6 +986,14 @@ remembered, researched, or did something unless the context supports it.
         r"|\bwho am i(?: with)?\b"
         r"|\b(?:the )?(?:person|people)(?:'s)? names?\b|\bname of (?:the |this |that )?person\b"
         r"|\bdo you (?:recognize|know) (?:me|them|him|her|this person)\b",
+        re.I,
+    )
+
+    _INNER_STATE = re.compile(
+        r"\b(?:how (?:are|do) you (?:feel|feeling|doing)"
+        r"|what'?s? (?:on your mind|are you (?:thinking|feeling|curious))"
+        r"|are you (?:okay|ok|conscious|sentient|alive|happy|tired|sad)"
+        r"|do you (?:feel|want|like|love|prefer|remember|have (?:feelings|a soul|a will)))\b",
         re.I,
     )
 
