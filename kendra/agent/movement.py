@@ -38,20 +38,29 @@ _ANGLE = re.compile(r"(?P<value>\d{1,3})\s*(?:degrees?|deg)\b", re.I)
 
 # Ordered most-specific-first; the first match wins.
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("stop", re.compile(r"^\s*(?:kendra[,\s]+)?(?:stop|halt|freeze|hold (?:still|on)|stay|wait)\b", re.I)),
+    # Stop is a SAFETY word: it matches anywhere in the utterance ("no
+    # matter what, stop"), and only an explicit negation nearby ("don't
+    # stop") disarms it. Halting on a false positive is harmless; missing a
+    # real stop is not.
+    ("stop", re.compile(r"\b(?:stop|halt|freeze|hold still)\b", re.I)),
     ("turn_around", re.compile(r"\bturn (?:yourself )?around\b|\bspin around\b|\bface (?:the )?other way\b", re.I)),
     ("turn_left", re.compile(r"\bturn (?:to your |to the )?left\b|\bgo left\b|\bswing left\b|\bleft turn\b", re.I)),
     ("turn_right", re.compile(r"\bturn (?:to your |to the )?right\b|\bgo right\b|\bswing right\b|\bright turn\b", re.I)),
     ("sidestep_left", re.compile(
-        r"\b(?:move|step|scoot|shift|slide|shuffle|shimmy)\s+(?:over\s+)?(?:to\s+)?(?:the\s+|your\s+|my\s+)?left\b"
+        r"\b(?:move|walk|go|step|scoot|shift|slide|shuffle|shimmy)\s+(?:over\s+)?(?:to\s+)?(?:the\s+|your\s+|my\s+)?left\b"
         r"|\bmove over to the left\b|\bto your left\b", re.I)),
     ("sidestep_right", re.compile(
-        r"\b(?:move|step|scoot|shift|slide|shuffle|shimmy)\s+(?:over\s+)?(?:to\s+)?(?:the\s+|your\s+|my\s+)?right\b"
+        r"\b(?:move|walk|go|step|scoot|shift|slide|shuffle|shimmy)\s+(?:over\s+)?(?:to\s+)?(?:the\s+|your\s+|my\s+)?right\b"
         r"|\bmove over to the right\b|\bto your right\b", re.I)),
     ("come", re.compile(r"\bcome (?:here|to me|over here|closer|here girl)\b|\bcome on over\b|\bover here\b", re.I)),
     ("away", re.compile(r"\bgo away\b|\bback off\b|\bgive me (?:some )?space\b|\bmove away\b|\bshoo\b", re.I)),
-    ("backward", re.compile(r"\b(?:back up|backup|go back(?:wards?)?|move back(?:wards?)?|reverse|scoot back)\b", re.I)),
-    ("goto", re.compile(r"\bgo (?:to|toward|towards|over to)\s+(?:the\s+|my\s+|that\s+)?(?P<target>[a-z][a-z\s'-]{1,30})", re.I)),
+    ("backward", re.compile(
+        r"\b(?:back up|backup|back away|reverse"
+        r"|(?:go|move|walk|crawl|step|come|scoot|take a step) back(?:wards?)?)\b",
+        re.I)),
+    ("goto", re.compile(
+        r"\b(?:go|walk|head|crawl) (?:to|toward|towards|over to)\s+"
+        r"(?:the\s+|my\s+|that\s+)?(?P<target>[a-z][a-z\s'-]{1,30})", re.I)),
     ("forward", re.compile(r"\b(?:go|move|walk|crawl|step|head)\s+(?:forward|ahead|straight|up)\b|\bcome forward\b", re.I)),
 ]
 
@@ -100,6 +109,17 @@ def _parse_distance(text: str) -> float | None:
     return None
 
 
+# What may precede a movement verb in a genuine command: politeness and
+# address, nothing else. "I might walk to the store later" is conversation;
+# a robot that starts walking at hypothetical speech is a hazard.
+_IMPERATIVE_PREFIX = re.compile(
+    r"^(?:\s*(?:hey|hi|okay|ok|now|so|and|then|please|kendra|girl"
+    r"|can you|could you|would you|will you|go ahead and|i want you to"
+    r"|i need you to|i'?d like you to)[,!.\s]*)*$",
+    re.I,
+)
+
+
 def parse_movement(text: str) -> MovementIntent | None:
     """Deterministic movement parse; None means 'not a movement command'."""
     if not text or not text.strip():
@@ -109,10 +129,16 @@ def parse_movement(text: str) -> MovementIntent | None:
         match = pattern.search(stripped)
         if not match:
             continue
+        if name != "stop" and not _IMPERATIVE_PREFIX.match(stripped[: match.start()]):
+            # A movement verb buried mid-sentence is narration, not a command
+            # ("I might walk to the store later"). Stop stays hair-trigger.
+            continue
         distance = _parse_distance(stripped)
         angle_match = _ANGLE.search(stripped)
         angle = float(angle_match.group("value")) if angle_match else None
         if name == "stop":
+            if re.search(r"\b(?:don'?t|do not|never|won'?t|not)\s+(?:\w+\s+)?(?:stop|halt|freeze)\b", stripped, re.I):
+                continue
             return MovementIntent("stop", raw=stripped)
         if name == "turn_around":
             return MovementIntent("turn", angle_deg=angle or 180.0, raw=stripped)
