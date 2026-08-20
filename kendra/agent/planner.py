@@ -898,8 +898,13 @@ remembered, researched, or did something unless the context supports it.
         Counting and reading are the exceptions worth asking directly.
         """
         text = (user_text or "").casefold()
-        if re.search(r"\bhow many\b|\bcount\b|\bfingers?\b", text):
-            return "How many?"
+        if re.search(r"\bfingers?\b", text):
+            # "How many?" with no noun is meaningless — that is how she came
+            # to report ten fingers on one hand. Ask the actual question,
+            # simply and completely.
+            return "How many fingers is the person holding up?"
+        if re.search(r"\bhow many\b|\bcount\b", text):
+            return (user_text or "").strip()[:120] or "How many objects are visible?"
         if re.search(r"\bread\b|\bwhat does it say\b|\btext\b", text):
             return "What text is visible?"
         return "Describe this image."
@@ -1243,6 +1248,13 @@ remembered, researched, or did something unless the context supports it.
     )
 
     _SIGHT_INTENT = re.compile(
+        # Questions about HIS body or gestures need her eyes, even with no
+        # 'look' in them. "How many fingers am I holding up?" was routed to
+        # plain chat, so she answered from anatomy — "ten fingers on each
+        # hand, twenty total" — without ever opening her eyes.
+        r"\bhow many fingers\b|\bfingers am i\b|\bholding up\b"
+        r"|\bwhat am i doing\b|\bwhat'?s in my hand\b|\bam i (?:holding|wearing)\b|"
+
         r"\b(?:"
         r"(?:can|do|what do|what can) you see"
         r"|se{1,3}\s+(?:me|this|that|it|us|him|her|the|my|anything|who)"
