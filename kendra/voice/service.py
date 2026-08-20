@@ -857,6 +857,9 @@ class VoiceService:
         raise KeyError(f"Unknown voice method: {method}")
 
     async def run(self) -> None:
+        import os
+
+        os.environ.setdefault("KENDRA_VOICE_STARTED_AT", str(time.time()))
         await self.server.start()
         # Warm the KV cache at startup so the first turn of the day does not
         # pay the full cold prefill.

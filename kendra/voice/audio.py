@@ -198,7 +198,44 @@ class LocalAudioCapture:
                     except Exception:
                         LOG.debug("device re-probe failed", exc_info=True)
                     kwargs["device"] = self.device
+        # In-process recovery is not enough. Once macOS wedges CoreAudio for
+        # a process (PaErrorCode -9986), reinitialising PortAudio does not
+        # clear it — she stayed deaf for 68 minutes with every service
+        # reporting healthy, and even the wake word could not reach her.
+        # Only a fresh process fixes it, and nothing supervises this one, so
+        # she restarts herself.
+        self._stream_failures = getattr(self, "_stream_failures", 0) + 1
+        if self._stream_failures >= 3:
+            self._self_restart()
         raise RuntimeError(f"microphone unavailable after retries: {last}")
+
+    def _self_restart(self) -> None:
+        """Re-exec this service so CoreAudio starts clean.
+
+        Guarded against loops: never within 90s of start-up, and at most
+        once every 5 minutes (tracked in the environment so it survives the
+        exec). If the microphone is genuinely absent, she keeps running deaf
+        and says so in diagnostics rather than thrashing.
+        """
+        import os
+        import sys
+
+        now = time.time()
+        started = float(os.environ.get("KENDRA_VOICE_STARTED_AT") or 0.0)
+        last_restart = float(os.environ.get("KENDRA_VOICE_LAST_RESTART") or 0.0)
+        if started and now - started < 90:
+            LOG.error("Microphone unavailable but service is too young to restart")
+            return
+        if last_restart and now - last_restart < 300:
+            LOG.error("Microphone unavailable; already restarted recently, staying up deaf")
+            return
+        LOG.error("Microphone unrecoverable (CoreAudio wedge) — restarting the voice service")
+        os.environ["KENDRA_VOICE_LAST_RESTART"] = str(now)
+        os.environ["KENDRA_VOICE_STARTED_AT"] = str(now)
+        try:
+            os.execv(sys.executable, [sys.executable, "-m", "kendra", *sys.argv[1:]])
+        except Exception:
+            LOG.exception("Self-restart failed")
 
     def wait_for_wake(self, wake_provider, stop_provider=None, cancel_event: threading.Event | None = None) -> str:
         self._ensure_device()
