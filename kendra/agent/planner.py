@@ -1145,6 +1145,51 @@ remembered, researched, or did something unless the context supports it.
 
     _SELF_REFERENCE = re.compile(r"\b(?:I|I'm|I am|my|me)\b[^.!?]{0,60}", re.I)
 
+    _PHATIC = re.compile(
+        r"^(?:hi|hey|hello|thanks?|thank you|okay|ok|yes|no|sure|cool|nice|"
+        r"good(?: morning| night| evening| afternoon)?|bye|goodbye|wow|hmm+|huh)\b[\s.!?]*$",
+        re.I,
+    )
+
+    def queue_consolidation(self, user_text: str, kendra_text: str, session_id: str) -> None:
+        """Coalescing memory consolidation.
+
+        One LLM call PER TURN piled into slot-1 bursts that live turns
+        collided with (the intermittent 30-90s spikes all day). Turns now
+        queue, and one drainer extracts memories from the WHOLE backlog in a
+        single call. Phatic exchanges never queue at all.
+        """
+        if len(user_text.strip()) < 25 or self._PHATIC.match(user_text.strip()):
+            return
+        pending = getattr(self, "_consolidation_pending", None)
+        if pending is None:
+            pending = self._consolidation_pending = []
+        pending.append((user_text, kendra_text, session_id))
+        if getattr(self, "_consolidation_draining", False):
+            return
+        self._consolidation_draining = True
+
+        async def drain() -> None:
+            try:
+                while getattr(self, "_consolidation_pending", []):
+                    await asyncio.sleep(float(self.settings.get("brain.consolidation_idle_seconds", 8)))
+                    await self._wait_until_idle()
+                    batch, self._consolidation_pending = self._consolidation_pending, []
+                    if not batch:
+                        break
+                    users = "\n".join(f"- {u}" for u, _k, _s in batch)
+                    kendras = "\n".join(f"- {k[:200]}" for _u, k, _s in batch)
+                    async with self._consolidation_lock:
+                        await self.brain.consolidate_turn(users, kendras, batch[-1][2])
+            except Exception:
+                LOG.exception("Batched memory consolidation failed")
+            finally:
+                self._consolidation_draining = False
+
+        task = asyncio.create_task(drain(), name="kendra-memory-consolidation")
+        self._consolidation_tasks.add(task)
+        task.add_done_callback(self._consolidation_tasks.discard)
+
     def _robot_register_score(self, text: str) -> int:
         """How machine-like a reply sounds, without enumerating phrasings.
 
@@ -1270,18 +1315,7 @@ remembered, researched, or did something unless the context supports it.
         consolidation: dict[str, Any] = {"stored": [], "reason": "disabled"}
         if bool(self.settings.get("brain.automatic_consolidation", True)):
 
-            async def consolidate_soon() -> None:
-                try:
-                    await asyncio.sleep(float(self.settings.get("brain.consolidation_idle_seconds", 8)))
-                    await self._wait_until_idle()
-                    async with self._consolidation_lock:
-                        await self.brain.consolidate_turn(user_text, final_text, session_id)
-                except Exception:
-                    LOG.exception("Background memory consolidation failed")
-
-            task = asyncio.create_task(consolidate_soon(), name="kendra-memory-consolidation")
-            self._consolidation_tasks.add(task)
-            task.add_done_callback(self._consolidation_tasks.discard)
+            self.queue_consolidation(user_text, final_text, session_id)
             consolidation = {"stored": [], "reason": "queued-in-background"}
         return {
             "text": final_text,
