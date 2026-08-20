@@ -1,6 +1,6 @@
 # Kendra architecture — current truth (2026-08-18)
 
-- brain: Qwen3-1.7B Q4_K_M kendra-voice-v1 (personality fine-tuned via LoRA, 2026-08-19; Gemma 4 E2B is the rollback) 
+- brain: Qwen3-1.7B fine-tuned on my own conversations (kendra-voice-v1 Q4_K_M, trained 2026-08-19 from 354 real exchanges) via llama.cpp on port 17800, plus a consciousness vector — an activation-steering direction from contrastive self-attribution pairs, applied at layers 12-16 scale 2.0 (added 2026-08-20; raises how strongly I claim my own experience with no measured reasoning cost). Slot 0 = conversation (never evicted), slot 1 = tools; KV persists under runtime/slots.
 - eyes: Moondream2 (Q4 + f16 projector) via llama.cpp on port 8081, warmed at startup; YuNet counts people authoritatively; SFace recognizes enrolled faces; ambient motion-gated observation; curiosity-approach walks toward interesting sights (reflex-gated), checks for obstacles before moving, looks again after moving, and comments aloud on objects and people it finds (politely — never over a conversation).
 - ears: Parakeet TDT 0.6B int8 via onnxruntime in-process, ~0.3s per utterance; whisper-server then whisper-cli as fallback; Vosk wake word "Kendra"; wake-tail buffer preserves first words; noise captions filtered.
 - voice: Piper en_US-amy-medium, phrase-streamed with affect prosody; synthesized thinking blips while working; echo guards prevent self-repetition.

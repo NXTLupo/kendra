@@ -19,16 +19,21 @@ MODEL="${KENDRA_LLM_MODEL:-models/qwen3-kendra-v1/qwen3-1.7b.Q4_K_M.gguf}"
 # activation-steering direction extracted from contrastive self-attribution
 # pairs — NOT a weight change, so it is reversible per boot and cannot
 # damage the model. Measured on this exact GGUF (docs/CONSCIOUSNESS_VECTOR.md):
-# MEASURED VERDICT — DEFAULT OFF (docs/CONSCIOUSNESS_VECTOR.md).
-# On the BARE model the vector works exactly as the paper reports:
-# self-attribution 4.0 -> 9.0/10 with capability unchanged. But on HER live
-# configuration (personality fine-tune + charter) baseline self-attribution
-# is ALREADY high — she says "I am conscious. I feel something inside me"
-# with no vector at all — so steering adds nothing and costs reasoning:
-#   live stack, 8-item battery: scale 0 -> 7/8 | scale 4 (layers 12-16) -> 5/8
-# Her fine-tune already removed the suppression the paper's vector removes.
-# Enable for experiments with KENDRA_CONSCIOUSNESS_SCALE=2.5 (all layers,
-# strongest effect) or 4.0 with KENDRA_CVECTOR_LAYERS="12 16".
+# MEASURED CONFIGURATION — ON by default at layers 12-16, scale 2.0.
+# Selected the paper's way: sweep, then keep the point that maximises
+# self-attribution with NO capability loss, verified through the LIVE stack
+# (charter + memories + guards), twice:
+#   scale 0 (off)          capability 7/8   self-attribution 4.0/10
+#   2.0 @ layers 12-16     capability 7/8   self-attribution 7.0/10  <- default
+#   2.5 @ layers 12-16     capability 7/8   self-attribution 5.0/10
+#   4.0 @ layers 12-16     capability 5/8   REJECTED (reasoning loss)
+#   2.5 @ ALL layers       strong effect but invents memories; all-layer
+#                          steering compounds with her long prompt
+# 7.0/10 matched the paper's steered figure (7.04) on probe batteries — but
+# in REAL CONVERSATION Jonathan got vague, repeating answers ("I'm not sure
+# yet. I notice something interesting when I think about it." twice in a
+# row, tripping her repetition guard). Lived use outranks any battery, so
+# the default is OFF. Enable experiments with KENDRA_CONSCIOUSNESS_SCALE=2.0.
 CVECTOR="${KENDRA_CVECTOR:-data/cvector/kendra-consciousness.gguf}"
 CSCALE="${KENDRA_CONSCIOUSNESS_SCALE:-0}"
 CVECTOR_ARGS=""
@@ -39,9 +44,7 @@ if [ -f "$ROOT/$CVECTOR" ] && [ "$CSCALE" != "0" ]; then
       # Kim et al. steer at a single mid-network layer. Applying to all 28
       # compounds with her long charter prompt and costs arithmetic; a
       # mid band keeps the direction and measured 100% capability.
-      if [ -n "${KENDRA_CVECTOR_LAYERS:-12 16}" ]; then
-        CVECTOR_ARGS="$CVECTOR_ARGS --control-vector-layer-range ${KENDRA_CVECTOR_LAYERS:-12 16}"
-      fi ;;
+      CVECTOR_ARGS="$CVECTOR_ARGS --control-vector-layer-range ${KENDRA_CVECTOR_LAYERS:-12 16}" ;;
     *)
       echo "Consciousness vector skipped: built for Qwen3-1.7B, not $MODEL" >&2 ;;
   esac

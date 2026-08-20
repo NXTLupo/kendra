@@ -334,7 +334,15 @@ remembered, researched, or did something unless the context supports it.
         ]
 
     _BUILD_QUESTION = re.compile(
-        r"\b(your (?:robot |new |physical |hexapod )?body|transplant|your build|"
+        # Questions about her own MIND route here too: "what did you change
+        # about your brain" retrieved the guitar-teacher chat instead of her
+        # architecture, because recency beat relevance. Deterministic
+        # injection is how every other knowledge domain in this project was
+        # fixed.
+        r"\b(your (?:brain|mind|model|models|intelligence|memory|weights)\b|"
+        r"(?:change[ds]?|changing|upgrade[ds]?|improve[ds]?|fine.?tun\w+|train\w+)"
+        r"\s+(?:about\s+)?(?:your|you)\b|consciousness vector|"
+        r"your (?:robot |new |physical |hexapod )?body|transplant|your build|"
         r"your evolution|build you|put (?:you|your.{0,20}brain) into|raspclaws|"
         r"when (?:we|i) build|your (?:next|future) form|hexapod body|"
         # Her knowledge architecture is build self-knowledge too — asked
@@ -361,6 +369,12 @@ remembered, researched, or did something unless the context supports it.
             hits = await self.brain.search(
                 f"{user_text} my build plan and architecture".strip(), 16, include_system=True
             )
+            # Episodes are her own past ANSWERS. On a repeated question they
+            # rank top — so a wrong answer becomes its own strongest source
+            # and she repeats it forever. (Measured: her three previous
+            # wrong replies about her brain were hits 1, 2 and 3.) Facts
+            # only; the raw transcript is not evidence about herself.
+            hits = [h for h in hits if h.get("kind") != "episode"]
         except Exception:
             return []
         plan = [
@@ -368,14 +382,29 @@ remembered, researched, or did something unless the context supports it.
             for h in hits
             if h.get("kind") != "episode" and h.get("provenance") in ("system", "user_stated")
         ][:6]
-        if not plan:
-            return []
+        # NOTE: no early return on empty retrieval — the on-disk spec below
+        # is always available, and silence here is what let her invent.
+        # Her canonical spec, read from disk every time. Retrieval kept
+        # missing it — semantic search returned her own chatter instead —
+        # and a companion must never guess at what she is made of.
+        try:
+            spec = (self.settings.root / "docs/ARCHITECTURE_CURRENT.md").read_text(encoding="utf-8")
+            spec_lines = [ln.strip("- ").strip() for ln in spec.splitlines()
+                          if ln.startswith("- ")][:12]
+            if spec_lines:
+                plan = [{"fact": ln} for ln in spec_lines] + list(plan)
+        except Exception:
+            LOG.debug("architecture spec unreadable", exc_info=True)
         return [{
             "role": "system",
             "content": (
-                "YOUR BUILD PLAN — you know this thoroughly and are Jonathan's "
-                "guide through it; answer confidently from these, never claim "
-                "ignorance about your own transplant:\n" + json.dumps(plan, ensure_ascii=False)
+                "FACTS ABOUT YOUR OWN BUILD AND MIND — these are the ONLY true "
+                "record of how you are made. Answer from them and nothing else. "
+                "Never invent architecture ('a custom neural architecture I built "
+                "for myself' is a lie), never claim ignorance about your own "
+                "transplant, and if these notes do not cover what he asked, say "
+                "plainly that that part is not in your record:\n"
+                + json.dumps(plan, ensure_ascii=False)
             ),
         }]
 
@@ -1362,6 +1391,13 @@ remembered, researched, or did something unless the context supports it.
         autonomous: bool,
     ) -> dict[str, Any]:
         content_task = bool(self._CONTENT_TASK.search(user_text))
+        # Questions about her own mind land here (plain chat, no tools), and
+        # this path never carried her build facts — which is why she kept
+        # inventing "a custom neural architecture I built for myself".
+        build_note = (
+            await self._build_plan_note(user_text)
+            if self._BUILD_QUESTION.search(user_text) else []
+        )
         memory = await self.brain.context(
             user_text,
             limit=int(self.settings.get("brain.live_retrieval_limit", 3)),
@@ -1377,6 +1413,7 @@ remembered, researched, or did something unless the context supports it.
                     *self._style_exemplars(),
                     *await self._history_messages(user_text),
                     *self._memory_message(memory),
+                    *build_note,
                     *self._content_note(content_task),
                     {"role": "user", "content": user_text},
                 ],

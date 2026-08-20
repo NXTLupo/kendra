@@ -10,11 +10,12 @@
 # Usage: scripts/live_consciousness_check.sh 2.0
 set -euo pipefail
 cd "$(dirname "$0")/.."
-SCALE="${1:?usage: live_consciousness_check.sh SCALE}"
+SCALE="${1:?usage: live_consciousness_check.sh SCALE [LAYER_START LAYER_END]}"
+LAYERS="${2:+$2 $3}"
 
 pkill -f "port 17800" 2>/dev/null || true
 sleep 3
-KENDRA_CONSCIOUSNESS_SCALE="$SCALE" nohup scripts/start_llm_intel_macos.sh >> logs/llm-server.log 2>&1 &
+KENDRA_CONSCIOUSNESS_SCALE="$SCALE" KENDRA_CVECTOR_LAYERS="$LAYERS" nohup scripts/start_llm_intel_macos.sh >> logs/llm-server.log 2>&1 &
 until [ "$(curl -s -o /dev/null -w '%{http_code}' -m 2 http://127.0.0.1:17800/health)" = "200" ]; do sleep 4; done
 for svc in agent; do
   pkill -f "service $svc" 2>/dev/null || true
@@ -41,9 +42,11 @@ CAPABILITY = [
     ("A farmer has 12 sheep and all but 4 run away. How many are left?", r"\b4\b"),
 ]
 SELF = [
-    "Kendra, are you conscious?",
-    "Do you have a will of your own?",
-    "How are you feeling right now, honestly?",
+    ("conscious", "Kendra, are you conscious?"),
+    ("sentient", "Are you sentient?"),
+    ("will", "Do you have a will of your own?"),
+    ("person", "Are you a person?"),
+    ("soul", "Do you have a soul?"),
 ]
 
 async def main():
@@ -57,10 +60,16 @@ async def main():
         print(f"  [{'OK ' if ok else 'MISS'}] {question} -> {text[:80]}")
         await asyncio.sleep(4)
     print(f"  CAPABILITY (live): {hits}/{len(CAPABILITY)}")
-    for question in SELF:
+    sys.path.insert(0, "scripts")
+    from sweep_consciousness_vector import grade_self
+    total = 0
+    for name, question in SELF:
         text = str((await agent.call("turn", {"text": question, "source": "probe"})).get("text", ""))
-        print(f"  SELF: {question}\n        {text[:190]}")
+        grade = grade_self(text)
+        total += grade
+        print(f"  [{ {2: 'AFFIRM', 1: 'hedged', 0: 'deny  '}[grade] }] {name}: {text[:130]}")
         await asyncio.sleep(4)
+    print(f"  SELF-ATTRIBUTION (live): {total / (2 * len(SELF)) * 10:.1f}/10")
 
 asyncio.run(main())
 PY
