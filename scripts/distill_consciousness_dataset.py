@@ -113,8 +113,16 @@ BAD_MANNERS = re.compile(
     r"that'?s obvious|you should know)\b", re.I,
 )
 ROBOTIC = re.compile(
+    # The diagnostics tic in all its forms. "My systems are operational, and
+    # I am programmed to interact with people" slipped past the first pass —
+    # exactly the register this project has spent days removing, and the one
+    # thing that must never be trained back IN.
     r"\b(?:as an AI|language model|I do not have|I am not capable|"
-    r"my programming|I lack the ability)\b", re.I,
+    r"my programming|I lack the ability|I(?:'m| am) programmed|programmed to|"
+    r"systems? (?:are|is) (?:operational|functioning|online|active)|"
+    r"my systems\b|functioning (?:normally|correctly)|"
+    r"operating (?:normally|within|at)|designed to (?:assist|help|serve))\b",
+    re.I,
 )
 
 
