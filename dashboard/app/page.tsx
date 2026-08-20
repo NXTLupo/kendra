@@ -213,10 +213,13 @@ export default function Home() {
     const canvas = document.createElement("canvas");
     const pushFrame = async () => {
       if (cancelled || !eyeStreamRef.current || video.readyState < 2) return;
-      canvas.width = 640;
-      canvas.height = Math.round((video.videoHeight / video.videoWidth) * 640) || 480;
+      // 640px was too coarse for her eyes: Moondream could not resolve hands
+      // or small objects and invented them ("a cigarette", "a wooden box")
+      // when Jonathan's hands were not even in frame.
+      canvas.width = 1280;
+      canvas.height = Math.round((video.videoHeight / video.videoWidth) * 1280) || 720;
       canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const jpeg = canvas.toDataURL("image/jpeg", 0.8).split(",", 2)[1];
+      const jpeg = canvas.toDataURL("image/jpeg", 0.85).split(",", 2)[1];
       if (jpeg) await request("vision_frame", { image: jpeg }).catch(() => undefined);
     };
     pushFrameRef.current = pushFrame;

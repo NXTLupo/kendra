@@ -331,6 +331,25 @@ class VisionService:
         cv2 = self._cv2()
         return cv2.cvtColor(cv2.resize(frame, (16, 9)), cv2.COLOR_BGR2GRAY).astype("float32")
 
+    @staticmethod
+    def _normalise_question(question: str) -> str:
+        """Strip sight-command boilerplate so rephrasings share a cache key.
+
+        "Take a look and SEE what I'm holding" and "take a look and TELL ME
+        what I'm holding" are the same question, but keying on raw text made
+        every rephrasing a full 22 s look.
+        """
+        text = question.casefold()
+        text = re.sub(
+            r"\b(?:hey |ok(?:ay)? )?kendra\b|\b(?:can|could|would|will) you\b|"
+            r"\b(?:please|now|right now|for me|real quick|quickly)\b|"
+            r"\btake a (?:quick )?look\b|\bhave a look\b|\blook (?:at|and)\b|"
+            r"\b(?:and )?(?:tell me|show me|see|say|describe)\b|\bwhat do you see\b",
+            " ", text,
+        )
+        text = text.replace("i'm", "i am").replace("what's", "what is")
+        return re.sub(r"[^a-z0-9 ]", " ", text).strip() or "scene"
+
     def _cached_scene_answer(self, frame, question: str) -> str | None:
         """Reuse a recent description when the scene has not really changed.
 
@@ -347,7 +366,7 @@ class VisionService:
         tolerance = float(self.settings.get("vision.scene_cache_tolerance", 6.0))
         now = time.time()
         for stamp, past_question, past_signature, description in getattr(self, "_scene_cache", []):
-            if past_question != question or now - stamp > ttl:
+            if past_question != self._normalise_question(question) or now - stamp > ttl:
                 continue
             if float(np.abs(signature - past_signature).mean()) <= tolerance:
                 return description
@@ -359,7 +378,7 @@ class VisionService:
         except Exception:
             return
         cache = getattr(self, "_scene_cache", [])
-        cache.append((time.time(), question, signature, description))
+        cache.append((time.time(), self._normalise_question(question), signature, description))
         self._scene_cache = cache[-8:]
 
     async def semantic_description(self, image_path: Path, question: str) -> str:
@@ -383,6 +402,10 @@ class VisionService:
         # detail dies at 448px (two fingers read as four). Detail questions
         # keep full resolution and pay the slower encode; scene questions
         # keep the fast 448px path.
+        # Precision (896px) is reserved for genuine fine detail: counting and
+        # reading. Hands and clothing were briefly routed here too, which cost
+        # 42s per look — but the real cause of invented objects was the SOURCE
+        # frame being 640px. At 1280 source, the fast 448px path is accurate.
         precision = bool(re.search(
             r"\b(how many|count|fingers?|read|text|number|digits?|letters?|small|exact)\b",
             question or "", re.I,
@@ -398,12 +421,24 @@ class VisionService:
         perspective = str(
             self.settings.get("vision.semantic_perspective", self.DEFAULT_PERSPECTIVE)
         )
-        prompt = f"{perspective}\n\nTask: {question}"
+        # NO persona preamble. Moondream is a visual question-answerer, not
+        # an actor: with "You are Kendra, a robot companion..." in front of
+        # the question it answered "Kendra" to "what is the person wearing?"
+        # and "I am a robot and I cannot see the image" to another. Her
+        # personality lives in her language model; the eye gets a plain
+        # question and nothing else.
+        prompt = (question or "Describe this image.").strip()
         payload = {
             "model": "local-vlm",
+            # IMAGE FIRST. With the text first, Moondream ignored the
+            # question entirely and returned a generic caption every time —
+            # which is where every invented "cigarette", "wooden box" and
+            # "you are holding a guitar" came from: she was never actually
+            # asking it anything. Image-then-text answers correctly, and
+            # will even say "No" (measured 8.9s vs 12.2s).
             "messages": [{"role": "user", "content": [
-                {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+                {"type": "text", "text": prompt},
             ]}],
             "temperature": 0.2,
             # Penguin-VL's token-budget discipline (TRA): spend generation

@@ -686,7 +686,13 @@ remembered, researched, or did something unless the context supports it.
                     "and nothing else; if visual_scene_error is set, say so honestly). You ALREADY looked — lead with what you see. "
                     "Speak about it directly: never say 'the image', 'the picture', or 'I can see the image' — you are looking at the real world. "
                     "If the person you see is the one talking to you, address them as 'you', never as 'he', 'she', or 'the man'. "
-                    "For fine counts (fingers, small objects, text) give your best reading and admit it may be off by one — your camera resolution is limited:\n"
+                    "For fine counts (fingers, small objects, text) give your best reading and admit it may be off by one — your camera resolution is limited. "
+                    "CRITICAL: the description lists what is VISIBLE, not what is held. Never turn a "
+                    "visible object into a held one — guitars on stands, a laptop on a desk and a "
+                    "keyboard are things in the room, not things in his hands. If he asks what he is "
+                    "holding and the description does not explicitly say he is holding something, tell "
+                    "him you cannot see anything in his hands. Never invent detail that is not in the "
+                    "description (no colours, brands, or engravings you were not told about):\n"
                     + json.dumps(scene, ensure_ascii=False)
                 ),
             }
@@ -880,6 +886,24 @@ remembered, researched, or did something unless the context supports it.
             False,
         )
 
+    @staticmethod
+    def _vlm_prompt(user_text: str) -> str:
+        """What to actually ask the eye.
+
+        Measured the hard way: through llama.cpp's --no-jinja path Moondream
+        does NOT reliably answer questions — it returned "Yes", "ASSISTANT"
+        and even "I am a robot and I cannot see the image". It captions
+        accurately and consistently. So the eye always captions, and her
+        language model answers Jonathan's actual question from that caption.
+        Counting and reading are the exceptions worth asking directly.
+        """
+        text = (user_text or "").casefold()
+        if re.search(r"\bhow many\b|\bcount\b|\bfingers?\b", text):
+            return "How many?"
+        if re.search(r"\bread\b|\bwhat does it say\b|\btext\b", text):
+            return "What text is visible?"
+        return "Describe this image."
+
     async def _look_now(self, user_text: str, observation: dict[str, Any]) -> None:
         """Deterministic sight: when the user asks Kendra to look, she looks.
 
@@ -907,7 +931,7 @@ remembered, researched, or did something unless the context supports it.
             visual = await asyncio.wait_for(
                 self.vision.observe(
                     True,
-                    (user_text or "Describe the scene.")[:200],
+                    self._vlm_prompt(user_text),
                     reuse_recent_seconds=reuse_window,
                 ),
                 timeout=float(self.settings.get("vision.look_timeout_seconds", 40.0)),

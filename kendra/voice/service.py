@@ -400,10 +400,21 @@ class VoiceService:
         # full reply and spoke NONE of it — Jonathan heard only thinking
         # tones, forever. Speaking a slightly-repetitive answer is far
         # better than appearing hung.
-        if not spoken_phrases and skipped_phrases:
+        # The rescue used to require that she had said NOTHING. But on sight
+        # and research turns she speaks an acknowledgment first ("Let me take
+        # a look right now"), which counted as speech — so the actual ANSWER
+        # could be suppressed as a duplicate and she would look, find the
+        # thing, and never say what she saw. Rescue whenever real content was
+        # dropped and is not already in what she spoke.
+        if skipped_phrases:
             rescued = " ".join(skipped_phrases).strip()
-            LOG.warning("All phrases were suppressed; speaking the answer anyway")
-            if rescued:
+            already = " ".join(spoken_phrases).casefold()
+            substantive = len(rescued) >= 20 and rescued.casefold() not in already
+            if substantive:
+                LOG.warning(
+                    "Answer content was suppressed after %d spoken phrase(s); speaking it anyway",
+                    len(spoken_phrases),
+                )
                 await self._speak_with_barge_in(rescued[:400], last_affect)
         return {**result, "interrupted": False}
 
