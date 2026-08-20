@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import html
 import re
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -93,7 +94,23 @@ class DuckDuckGoLiteClient:
 
     _RSS_ITEM = re.compile(r"<item>.*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>.*?<link>(.*?)</link>", re.S)
 
-    async def _news_rss(self, query: str, limit: int) -> list[SearchResult]:
+    # Background top-stories cache: "what's in the news" should not wait on
+    # a network round trip. Refreshed on a timer, served instantly, and it
+    # degrades to a live fetch if the cache is cold or stale.
+    _TOP_CACHE: dict[str, object] = {"at": 0.0, "results": []}
+    TOP_TTL_SECONDS = 420.0
+
+    async def refresh_top_stories(self) -> int:
+        """Warm the front-page cache. Safe to call on a timer."""
+        try:
+            results = await self._news_rss("", 8, use_cache=False)
+        except Exception:
+            return 0
+        if results:
+            DuckDuckGoLiteClient._TOP_CACHE = {"at": time.time(), "results": results}
+        return len(results)
+
+    async def _news_rss(self, query: str, limit: int, use_cache: bool = True) -> list[SearchResult]:
         # Words that carry no topic. Leaving fragments behind turned
         # "what's in the news" into a Google News SEARCH for "what s in",
         # which returned university essays titled "What's In a Face?"
@@ -117,6 +134,10 @@ class DuckDuckGoLiteClient:
         if topic_words:
             url = "https://news.google.com/rss/search?q=" + "+".join(topic_words) + "&hl=en-US&gl=US&ceid=US:en"
         else:
+            cached = DuckDuckGoLiteClient._TOP_CACHE
+            fresh_enough = (time.time() - float(cached.get("at") or 0.0)) < self.TOP_TTL_SECONDS
+            if use_cache and fresh_enough and cached.get("results"):
+                return list(cached["results"])[:limit]  # type: ignore[index]
             url = "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en"
         response = await self._client.get(url)
         response.raise_for_status()

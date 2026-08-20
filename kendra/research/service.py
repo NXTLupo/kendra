@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
@@ -11,6 +12,8 @@ from .fetch import SafeFetcher
 from .kiwix import KiwixClient
 from .searxng import SearXNGClient
 from .websearch import DuckDuckGoLiteClient
+
+LOG = logging.getLogger(__name__)
 
 
 class ResearchService:
@@ -185,7 +188,20 @@ class ResearchService:
             return await self.offline_evidence(query)
         raise KeyError(f"Unknown research method: {method}")
 
+    async def _news_prefetch_loop(self) -> None:
+        """Keep the day's front page warm so news answers skip the network."""
+        while True:
+            try:
+                count = await self.search.refresh_top_stories()
+                if count:
+                    LOG.info("Top-stories cache refreshed (%d headlines)", count)
+            except Exception:
+                LOG.debug("News prefetch skipped", exc_info=True)
+            await asyncio.sleep(360)
+
     async def run(self) -> None:
+        prefetch = asyncio.create_task(self._news_prefetch_loop())
+        prefetch.add_done_callback(lambda _t: None)
         await self.server.serve_forever()
 
 

@@ -326,17 +326,59 @@ class VisionService:
         self._note_known_person(matches)
         return matches
 
+    def _scene_signature(self, frame):
+        """Coarse perceptual fingerprint: a 16x9 grayscale thumbnail."""
+        cv2 = self._cv2()
+        return cv2.cvtColor(cv2.resize(frame, (16, 9)), cv2.COLOR_BGR2GRAY).astype("float32")
+
+    def _cached_scene_answer(self, frame, question: str) -> str | None:
+        """Reuse a recent description when the scene has not really changed.
+
+        An exact hash never matches a live camera — a person breathing
+        changes every pixel — so this compares fingerprints by mean absolute
+        difference. Same room, same question, no meaningful movement: answer
+        instantly instead of paying another 12s look.
+        """
+        try:
+            signature = self._scene_signature(frame)
+        except Exception:
+            return None
+        ttl = float(self.settings.get("vision.scene_cache_seconds", 90))
+        tolerance = float(self.settings.get("vision.scene_cache_tolerance", 6.0))
+        now = time.time()
+        for stamp, past_question, past_signature, description in getattr(self, "_scene_cache", []):
+            if past_question != question or now - stamp > ttl:
+                continue
+            if float(np.abs(signature - past_signature).mean()) <= tolerance:
+                return description
+        return None
+
+    def _remember_scene(self, frame, question: str, description: str) -> None:
+        try:
+            signature = self._scene_signature(frame)
+        except Exception:
+            return
+        cache = getattr(self, "_scene_cache", [])
+        cache.append((time.time(), question, signature, description))
+        self._scene_cache = cache[-8:]
+
     async def semantic_description(self, image_path: Path, question: str) -> str:
         self._last_semantic_at = time.time()
         endpoint = self.settings.get("vision.semantic_vlm_url")
         if not endpoint:
             raise RuntimeError("No local semantic VLM endpoint is configured")
-        cache_key = hashlib.sha256(image_path.read_bytes() + question.encode()).hexdigest()
-        cached = getattr(self, "_semantic_cache", {}).get(cache_key)
-        if cached:
-            return cached
         cv2 = self._cv2()
         frame = cv2.imread(str(image_path))
+        # TEMPORAL CACHE. The old key was a hash of the raw JPEG bytes, which
+        # never repeats with a live camera — so asking "what do you see"
+        # twice in a still room paid the full 12s look twice. Key on a
+        # coarse perceptual signature instead: a 16x9 grayscale thumbnail
+        # quantised to 16 levels. Same scene, same question, instant answer;
+        # anything that actually moves misses the cache and looks again.
+        reused = self._cached_scene_answer(frame, question)
+        if reused:
+            LOG.info("Semantic look served from the scene cache (no meaningful change)")
+            return reused
         # Precision look: counting fingers, reading text, or judging small
         # detail dies at 448px (two fingers read as four). Detail questions
         # keep full resolution and pay the slower encode; scene questions
@@ -382,11 +424,7 @@ class VisionService:
             description,
             flags=re.I,
         ) or description
-        if not hasattr(self, "_semantic_cache"):
-            self._semantic_cache: dict[str, str] = {}
-        if len(self._semantic_cache) > 32:
-            self._semantic_cache.clear()
-        self._semantic_cache[cache_key] = description
+        self._remember_scene(frame, question, description)
         return description
 
     async def observe(

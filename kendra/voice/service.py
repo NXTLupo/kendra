@@ -281,6 +281,7 @@ class VoiceService:
         accumulator = PhraseAccumulator(
             min_chars=int(self.settings.get("voice.streaming.min_phrase_chars", 28)),
             max_chars=int(self.settings.get("voice.streaming.max_phrase_chars", 140)),
+            first_min_chars=int(self.settings.get("voice.streaming.first_phrase_chars", 14)),
         )
         last_affect = "warm"
         interrupted = asyncio.Event()

@@ -15,10 +15,21 @@ class PhraseAccumulator:
     _boundary = re.compile(r"[.!?;:]\s|,\s")
     _sentence_end = re.compile(r"[.!?]\s")
 
-    def __init__(self, min_chars: int = 28, max_chars: int = 140):
+    def __init__(self, min_chars: int = 28, max_chars: int = 140,
+                 first_min_chars: int | None = None):
         self.min_chars = max(8, int(min_chars))
         self.max_chars = max(self.min_chars + 8, int(max_chars))
+        # Time-to-first-audio is the felt latency; every later phrase is
+        # hidden behind speech already playing. So the FIRST phrase may be
+        # much shorter — "Oh, absolutely." starts her talking a second
+        # sooner — while later phrases keep their length for prosody.
+        self.first_min_chars = max(6, int(first_min_chars if first_min_chars is not None else 14))
+        self.emitted = 0
         self.buffer = ""
+
+    @property
+    def _active_min(self) -> int:
+        return self.first_min_chars if self.emitted == 0 else self.min_chars
 
     def feed(self, delta: str) -> list[str]:
         if not delta:
@@ -34,6 +45,7 @@ class PhraseAccumulator:
             phrase = self.buffer[:cut].strip()
             self.buffer = self.buffer[cut:].lstrip()
             if phrase:
+                self.emitted += 1
                 ready.append(phrase)
         return ready
 
@@ -49,14 +61,14 @@ class PhraseAccumulator:
                 return match.end()
         for match in self._boundary.finditer(self.buffer):
             end = match.end()
-            if end >= self.min_chars:
+            if end >= self._active_min:
                 return end
         return None
 
     def _fallback_cut(self) -> int:
         window = self.buffer[: self.max_chars]
         space = window.rfind(" ")
-        return space + 1 if space >= self.min_chars else min(len(self.buffer), self.max_chars)
+        return space + 1 if space >= self._active_min else min(len(self.buffer), self.max_chars)
 
     def flush(self) -> str:
         value = self.buffer.strip()

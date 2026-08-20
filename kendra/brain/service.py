@@ -249,14 +249,30 @@ class BrainService:
                 # few quiet minutes and enough uncompiled raw entries. This
                 # is what makes the second brain self-updating within a
                 # session instead of only overnight.
+                pending = self.second_brain.pending_count()
                 if (
                     idle_seconds
-                    >= float(self.settings.get("brain.second_brain.compile_idle_minutes", 5)) * 60
-                    and self.second_brain.pending_count()
-                    >= int(self.settings.get("brain.second_brain.compile_min_entries", 8))
+                    >= float(self.settings.get("brain.second_brain.compile_idle_minutes", 3)) * 60
+                    and pending >= int(self.settings.get("brain.second_brain.compile_min_entries", 8))
                 ):
-                    result = await self.consolidator.compile_wiki(self.second_brain)
-                    LOG.info("Wiki compile: %s", result)
+                    # Drain the backlog in bounded batches. A 15-minute idle
+                    # gate never fires during a talkative day, so 621 raw
+                    # entries had piled up uncompiled — knowledge she had
+                    # lived but could not look up. Several small compiles
+                    # per lull, each re-checking that he is still quiet.
+                    batches = int(self.settings.get("brain.second_brain.compiles_per_idle", 3))
+                    for _ in range(batches):
+                        result = await self.consolidator.compile_wiki(self.second_brain)
+                        LOG.info("Wiki compile: %s (pending %d)",
+                                 result, self.second_brain.pending_count())
+                        row = self.store.conn.execute("SELECT MAX(created_at) FROM turns").fetchone()
+                        last = str(row[0] or "")
+                        if last:
+                            age = (datetime.now(UTC) - datetime.fromisoformat(last)).total_seconds()
+                            if age < 60:
+                                break  # he started talking; stop compiling
+                        if self.second_brain.pending_count() < 8:
+                            break
                 if idle_seconds < idle_minutes * 60:
                     continue
                 now = datetime.now(UTC).timestamp()
