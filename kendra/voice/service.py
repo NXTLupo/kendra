@@ -429,12 +429,21 @@ class VoiceService:
             self._leds(thinking=True, thinking_mode=mode)
             import difflib
 
+            # Content-based echo rejection is a BACKUP for the timing guard,
+            # and it must never eat real speech. At 0.45 it discarded
+            # Jonathan answering her — "I didn't eat lunch yet" after she
+            # asked about lunch, and a bare "Thank you." — leaving her
+            # apparently unresponsive. Normal conversation reuses the other
+            # person's words, so only a long, near-verbatim match counts,
+            # and short replies are never judged this way.
             for spoken_at, spoken in getattr(self, "_spoken_ledger", []):
                 if time.time() - spoken_at > 45:
                     continue
+                if len(user_text) < 30:
+                    continue  # too short to distinguish echo from agreement
                 if difflib.SequenceMatcher(
                     None, user_text.casefold(), spoken.casefold()
-                ).ratio() > 0.45:
+                ).ratio() > 0.82:
                     LOG.info("Discarded self-echo transcript: %r", user_text[:60])
                     return {"heard": "", "response": ""}
             lowered = user_text.strip().lower().rstrip(".!")
