@@ -10,16 +10,16 @@ through the build by voice.
 
 | Organ | Model / engine | Resident | Serves |
 |---|---|---:|---|
-| Language brain | Gemma 4 E2B IT Q4_0 · llama.cpp (slots 0/1 pinned, KV persistence, prewarm) | ~2.8 GB | conversation, planner, consolidation, dreams |
+| Language brain | Qwen3-1.7B Q4_K_M **fine-tuned on her own conversations** (kendra-voice-v1) + consciousness vector (layers 12-16, scale 2.0) · llama.cpp (slots 0/1 pinned, KV persistence, mlock, prewarm) | ~1.6 GB | conversation, planner, consolidation, dreams |
 | Eyes (semantic) | Moondream2 Q4 + f16 projector · llama.cpp | ~2.0 GB | scene description, precision looks, ambient vision |
 | Eyes (faces) | YuNet + SFace · OpenCV | ~0.05 GB | people counting (authoritative), recognition |
 | Ears | Parakeet TDT 0.6B int8 · onnxruntime in-process | ~0.7 GB | 0.3 s transcription (whisper fallback chain) |
 | Wake | Vosk small en-US | ~0.1 GB | "Kendra" + spoken stop |
-| Voice | Piper en_US-amy-medium (+ synthesized thinking blips) | ~0.1 GB | phrase-streamed speech, affect prosody |
+| Voice | Kokoro-82M ONNX, af_heart @ pitch 1.20 (Piper amy-medium = rollback) + synthesized thinking blips in three families | ~0.3 GB | phrase-streamed speech, affect prosody |
 | Memory | Qwen3-Embedding-0.6B int8 · onnxruntime (q4 on Pi) | ~0.65 GB | semantic recall, relevance-gated hybrid search |
 | Services | ten Python services + SQLite brain | ~1.5 GB | everything above, reflex-gated |
 
-**Measured total ≈ 7.9 GB resident.** This is the headline spec change:
+**Measured total ≈ 7.2 GB resident.** This is the headline spec change:
 
 > **The 8 GB Pi 5 no longer fits her mind with headroom. Buy the 16 GB Pi 5.**
 > (Fallback if 8 GB is already owned: Qwen-embedding q4 variant, VLM ctx 2048,

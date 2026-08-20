@@ -102,7 +102,7 @@ Commit only non-sensitive benchmark results, not personal recordings or biometri
 Use `config/webots.yaml` with real hardware disconnected.
 
 1. Open `simulator/webots/worlds/kendra_virtual.wbt` and verify the local bridge is listening on `127.0.0.1:8765`.
-2. Start the local text model on `127.0.0.1:8080` and local multimodal model on `127.0.0.1:8081`.
+2. Start the local text model on `127.0.0.1:17800` and local multimodal model on `127.0.0.1:17801`.
 3. Run `python -m kendra --config config/webots.yaml dev start --voice`.
 4. Confirm `dev status` shows brain, identity, reflex, body, research, vision, LEDs, delivery, agent, and voice alive.
 5. Say **Kendra**, ask a question, and record end-of-speech -> first-audible-phoneme latency.
@@ -125,7 +125,7 @@ With the stack running under `config/webots.yaml`, launch `scripts/start_kendra_
 2. ten service indicators, LLM/VLM state, reflex lock, cliff sensors, front distance, battery, and body state update without a page reload;
 3. text chat creates a visible user/Kendra turn and persists it in Kendra Brain;
 4. push-to-talk pauses wake capture, transcribes locally, responds locally, and resumes `Kendra` listening;
-5. webcam capture appears in the UI and the description comes only from `127.0.0.1:8081`;
+5. webcam capture appears in the UI and the description comes only from `127.0.0.1:17801`;
 6. walk/look/pose commands move only the Webots body and **Stop** reaches the deterministic Body service;
 7. a Kendra Brain JSONL file imports once and is deduplicated on a second import;
 8. a wrong SSH host key makes Wi-Fi brain sync fail closed;

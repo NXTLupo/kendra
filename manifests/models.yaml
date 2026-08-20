@@ -40,7 +40,7 @@ models:
   multimodal_vision:
     name: Moondream2 (20250414)
     runtime: llama.cpp-libmtmd (--no-jinja; vicuna template drops media marker under jinja)
-    endpoint: http://127.0.0.1:8081/v1
+    endpoint: http://127.0.0.1:17801/v1
     path: models/moondream2/moondream2-text-model-Q4_K_M.gguf
     sha256_local_requant: 6b04b0516b8e2687f1b17e7c26a07c4a7ff2a9707b5dd6b43c7c7bb2c9e0aa9d
     source_path: models/moondream2/moondream2-text-model-f16.gguf
