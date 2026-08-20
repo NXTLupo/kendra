@@ -38,6 +38,24 @@ class VisionService:
         semantic_endpoint = settings.get("vision.semantic_vlm_url")
         if semantic_endpoint:
             assert_loopback_http_url(str(semantic_endpoint))
+        # Which eye answers semantic questions: the llama.cpp server (which
+        # can only caption) or Moondream's own runtime (which answers
+        # questions and encodes each frame once). Switch with
+        # vision.semantic_provider.
+        self.eye = None
+        if str(settings.get("vision.semantic_provider", "llamacpp")) == "moondream_onnx":
+            from .moondream_onnx import MoondreamOnnxEye
+
+            self.eye = MoondreamOnnxEye(
+                settings.path("vision.moondream_model")
+                if settings.get("vision.moondream_model") else
+                Path("models/moondream-05b/moondream-0_5b-int8.mf"),
+                cache_seconds=float(settings.get("vision.scene_cache_seconds", 90)),
+            )
+            ok, detail = self.eye.available()
+            if not ok:
+                LOG.error("Moondream ONNX eye unavailable (%s); falling back to llama.cpp", detail)
+                self.eye = None
 
     def _cv2(self):
         try:
@@ -398,6 +416,16 @@ class VisionService:
         if reused:
             LOG.info("Semantic look served from the scene cache (no meaningful change)")
             return reused
+
+        if self.eye is not None:
+            # Moondream's own runtime: encode once per frame, then answer.
+            import asyncio as _asyncio
+
+            signature = self._scene_signature(frame)
+            answer = await _asyncio.to_thread(self.eye.ask, frame, signature, question)
+            self._remember_scene(frame, question, answer)
+            self._last_semantic_at = time.time()
+            return answer
         # Precision look: counting fingers, reading text, or judging small
         # detail dies at 448px (two fingers read as four). Detail questions
         # keep full resolution and pay the slower encode; scene questions
@@ -489,6 +517,30 @@ class VisionService:
         except Exception as exc:
             result["recognized_people"] = []
             result["face_recognition_status"] = f"unavailable:{type(exc).__name__}"
+        # PRESENCE GATE. Person-questions presuppose a person, and both eyes
+        # answer the presupposition rather than the image: asked "what is the
+        # person holding" of an EMPTY CHAIR, Moondream 0.5B replied "a guitar
+        # in their hands", then "a black shirt", then "three fingers". YuNet
+        # is authoritative about whether anyone is there, so when it sees
+        # nobody, the question never reaches the language-vision model.
+        person_question = bool(re.search(
+            r"\b(person|people|he|she|they|i|me|my|you|your|holding|wearing|"
+            r"fingers?|hands?|face|smiling|doing)\b",
+            str(question or ""), re.I,
+        ))
+        if semantic and person_question and not people:
+            names = [
+                str(m.get("display_name"))
+                for m in (result.get("recognized_people") or [])
+                if isinstance(m, dict) and m.get("display_name")
+            ]
+            if not names:
+                result["visual_scene"] = (
+                    "No person is visible in the frame right now — the room is empty "
+                    "from where I am looking."
+                )
+                result["people_count_rule"] = "no_person_detected"
+                return result
         if semantic:
             # ELC addContext pattern, localized: her ambient eyes describe
             # the scene continuously, so a GENERIC sight question can reuse

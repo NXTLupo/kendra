@@ -219,6 +219,13 @@ vision:
   frame_height: 720
   aruco_dictionary: DICT_4X4_50
   perch_marker_id: 23
+  # llamacpp (default): Moondream 2B on the llama.cpp server — captions
+  # reliably but cannot answer questions through the --no-jinja path.
+  # moondream_onnx: Moondream 0.5B via its own runtime — encodes each frame
+  # once (~7s) then answers targeted questions in ~1s, and runs on the same
+  # onnxruntime wheels as the Pi.
+  semantic_provider: llamacpp
+  moondream_model: ./models/moondream-05b/moondream-0_5b-int8.mf
   semantic_vlm_url: null
   face:
     yunet_model: ./models/vision/face_detection_yunet_2023mar.onnx
