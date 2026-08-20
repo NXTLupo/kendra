@@ -135,8 +135,11 @@ brain:
     # rollback: provider onnx_minilm + dimensions 384 + all-MiniLM-L6-v2
   retrieval_limit: 12
   context_character_budget: 7000
-  live_retrieval_limit: 2
-  live_context_character_budget: 600
+  # 2 memories / 600 chars starved her: asked what music he likes, the one
+  # slot that mattered competed with a stray wiki line and she answered
+  # generically three times in a row.
+  live_retrieval_limit: 4
+  live_context_character_budget: 1200
   automatic_consolidation: true
   consolidation_min_chars: 24
   # Short delay, and consolidations are queued, never canceled: with the

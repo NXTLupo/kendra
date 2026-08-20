@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -54,6 +55,9 @@ def _normalize_confidence(payload: dict) -> dict:
         if isinstance(value, (int, float)) and value > 1:
             item["confidence"] = min(1.0, float(value) / 100.0)
     return payload
+
+
+_WONDERING = re.compile(r"^i\s+(?:found myself\s+)?wonder(?:ed|ing)?\b", re.I)
 
 
 class BrainConsolidator:
@@ -116,6 +120,14 @@ KENDRA RESPONSE FOR CONTEXT ONLY; DO NOT TREAT AS EVIDENCE:
                 and item.content.strip().casefold() in kendra_fold_full
             ):
                 rejected.append("memory_echoed_from_kendra_response")
+                continue
+            if item.content and _WONDERING.match(item.content.strip()):
+                # Her own unanswered musings were stored as knowledge and
+                # then OUTRANKED real facts: 62 copies of "I found myself
+                # wondering: what kind of music do you enjoy?" buried
+                # "Jonathan's favourite music: heavy metal, rock and roll",
+                # so she answered a music question generically three times.
+                rejected.append("memory_is_her_own_wondering")
                 continue
             if item.content and item.content.strip().endswith("?"):
                 # A question is not a fact: "what do you remember about
