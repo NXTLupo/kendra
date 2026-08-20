@@ -400,5 +400,5 @@ app.on("before-quit", () => {
   // every sense and her voice stop. Desktop only — never ships to the Pi.
   try {
     execSync(`pkill -f -- '-m kendra --config .* service '`, { stdio: "ignore" });
-  } catch (_e) { /* nothing running is fine */ }
+  } catch { /* nothing running is fine */ }
 });
