@@ -46,3 +46,42 @@ became the equivalent wins on the native HTTP path.
 - first audio: earlier by roughly the length of one short clause
 - wiki backlog: 621 entries draining instead of stuck
 - speculative decoding: rejected on measurement, harness retained for the Pi
+
+---
+
+## Follow-up: Moondream 0.5B evaluated (2026-08-20)
+
+**Question: will it run on a Raspberry Pi 5? Yes.** Core Electronics'
+guide is itself a Pi 5 guide using these exact `.mf.gz` files, and the
+`moondream` package runs on **onnxruntime** — already Kendra's runtime for
+Parakeet, Kokoro and her embeddings on both x86_64 macOS and aarch64 Linux.
+Their Pi 5 figures: **0.5B ≈ 8 s/frame, 2B ≈ 20 s/frame**.
+
+Measured here on a real camera frame (0.5B int8, 693 MB, `models/moondream-05b/`):
+
+| Step | Time | Notes |
+|---|---:|---|
+| model load | 3.1 s | once at startup |
+| **encode image** | **6.9 s** | **once per frame** |
+| query "what is the person holding?" | 1.2 s | "a guitar in their hands" — correct |
+| query "what is the person wearing?" | 0.9 s | "a grey shirt and glasses" — correct |
+| query "how many people?" | 0.7 s | said two; there was one — YuNet stays authoritative for counting |
+| free-form "describe this image" | 12.5 s | invented a beard and a black vest — **avoid long descriptions** |
+
+**The architectural prize is encode-once-ask-many.** Today every question
+costs a fresh ~12 s look through llama.cpp, and — as this session proved —
+that path cannot answer questions at all (`--no-jinja` returns captions,
+"Yes", or "ASSISTANT"). With 0.5B, one 6.9 s encode then three targeted
+questions at ~1 s each gives richer, more accurate sight in roughly the
+time one blind caption costs now.
+
+**Not adopted yet, deliberately.** It is a new inference path (Moondream's
+own runtime rather than llama.cpp) and deserves a clean session, not a live
+conversation. Install note: it downgrades `huggingface-hub` and `tokenizers`
+below what `transformers` wants — verified harmless because her runtime uses
+`onnx-asr` and ONNX embeddings, with all ten services healthy afterwards.
+
+Adoption sketch when the time comes: a `moondream_onnx` semantic provider
+alongside the llama.cpp one, encode cached per frame with the existing
+perceptual scene signature, targeted questions per user intent, YuNet still
+authoritative for people counts, and Piper-style rollback via one config key.
