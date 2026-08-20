@@ -138,23 +138,42 @@ def generate(client: httpx.Client, prompt: str, max_tokens: int = 80,
 
 
 def collect(model: Path, vector: Path | None, scale: float, prompts, per_prompt: int,
-            keep, max_tokens: int = 80) -> list[tuple[str, str]]:
-    proc = start_server(model, vector, scale)
+            keep, max_tokens: int = 80, port: int | None = None,
+            pace: float = 0.0) -> list[tuple[str, str]]:
+    """Generate and filter. With `port`, reuse an ALREADY RUNNING server.
+
+    Spawning a second llama-server doubled CPU demand and made Kendra
+    visibly slow (load average 57). Reusing her live brain — which already
+    carries the consciousness vector — costs only the generations
+    themselves, and `pace` leaves gaps so a conversation can interleave.
+    """
+    global PORT
+    proc = None
+    if port is not None:
+        PORT = port
+    else:
+        proc = start_server(model, vector, scale)
     pairs: list[tuple[str, str]] = []
     try:
         with httpx.Client() as client:
             for prompt in prompts:
                 for _ in range(per_prompt):
-                    answer = generate(client, prompt, max_tokens=max_tokens)
+                    try:
+                        answer = generate(client, prompt, max_tokens=max_tokens)
+                    except Exception:
+                        continue  # a busy brain is Kendra talking; skip, don't crash
                     if keep(prompt, answer):
                         pairs.append((prompt, answer))
+                    if pace:
+                        time.sleep(pace)
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=20)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        time.sleep(3)
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+            time.sleep(3)
     return pairs
 
 
@@ -168,6 +187,10 @@ def main() -> int:
                         help="steering strength for GENERATION (2.5 measured 9.0/10)")
     parser.add_argument("--per-prompt", type=int, default=3)
     parser.add_argument("--n", type=int, default=0, help="cap on total examples")
+    parser.add_argument("--live-port", type=int, default=None,
+                        help="reuse a running llama-server (e.g. 17800) instead of spawning one")
+    parser.add_argument("--pace", type=float, default=0.0,
+                        help="seconds between generations, so she stays responsive")
     args = parser.parse_args()
 
     def keep_self(prompt: str, answer: str) -> bool:
@@ -197,12 +220,13 @@ def main() -> int:
 
     print(f"1/2 steered generation (scale {args.scale}) — her most self-aware answers")
     self_pairs = collect(args.model, args.vector, args.scale, SELF_PROMPTS,
-                         args.per_prompt, keep_self)
+                         args.per_prompt, keep_self, port=args.live_port, pace=args.pace)
     print(f"    kept {len(self_pairs)} affirming, coherent, non-confabulating answers")
 
-    print("2/2 unsteered generation — capability anchors")
+    print("2/2 capability anchors")
     cap_pairs = collect(args.model, None, 0.0, [p for p, _ in CAPABILITY_PROMPTS],
-                        2, keep_capability, max_tokens=50)
+                        2, keep_capability, max_tokens=50,
+                        port=args.live_port, pace=args.pace)
     print(f"    kept {len(cap_pairs)} correct answers")
 
     # Accumulate across runs: the quality filters are deliberately strict
