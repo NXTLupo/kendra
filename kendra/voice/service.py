@@ -333,6 +333,7 @@ class VoiceService:
             )
 
         spoken_phrases: list[str] = []
+        skipped_phrases: list[str] = []
         was_interrupted = False
         turn_started = time.time()
         while True:
@@ -345,6 +346,7 @@ class VoiceService:
                 # metric; target <1.5s once the voice LoRA lands.
                 LOG.info("First audio out in %.1fs", time.time() - turn_started)
             if not _speakable_phrase(phrase, first=not spoken_phrases):
+                skipped_phrases.append(phrase)
                 LOG.info("Skipped an echoed phrase before it was spoken")
                 continue
             spoken_phrases.append(phrase)
@@ -391,6 +393,17 @@ class VoiceService:
                 "interrupted": True,
             }
         result = await producer
+        # A turn must never be silent. The duplicate-phrase guard exists to
+        # stop her parroting, but when every phrase of an answer resembles a
+        # recent one (repeated refusals did exactly this), she generated a
+        # full reply and spoke NONE of it — Jonathan heard only thinking
+        # tones, forever. Speaking a slightly-repetitive answer is far
+        # better than appearing hung.
+        if not spoken_phrases and skipped_phrases:
+            rescued = " ".join(skipped_phrases).strip()
+            LOG.warning("All phrases were suppressed; speaking the answer anyway")
+            if rescued:
+                await self._speak_with_barge_in(rescued[:400], last_affect)
         return {**result, "interrupted": False}
 
     async def _capture_turn(

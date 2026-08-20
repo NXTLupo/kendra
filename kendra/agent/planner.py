@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 import time
 import uuid
@@ -617,11 +618,21 @@ remembered, researched, or did something unless the context supports it.
         # reading it aloud as a source ("what I actually found was:
         # something you already found out recently") is nonsense.
         titles = [x for x in titles if x and not x.startswith(("something you already", "from my research"))]
+        # Vary the wording: an identical canned sentence every time is
+        # itself a repeat, and her duplicate-phrase guard silenced it.
         if titles:
-            return ("I don't want to guess on the details. What I actually found was: "
-                    + "; ".join(titles) + ". Want me to dig into one of those?")
-        return ("I couldn't confirm the specifics from what I found, so I'd rather not "
-                "guess. Want me to search different words?")
+            options = [
+                f"I don't want to guess on the details. What I actually found was: {'; '.join(titles)}. Want me to dig into one?",
+                f"The specifics didn't come through in what I found — just these: {'; '.join(titles)}. Should I go deeper on one?",
+                f"I'd rather not invent the details. My sources were: {'; '.join(titles)}. Want me to read one properly?",
+            ]
+        else:
+            options = [
+                "I couldn't confirm the specifics from what I found, so I'd rather not guess. Want me to search different words?",
+                "My search didn't turn up anything solid enough to trust. Try me with different wording?",
+                "Nothing I found actually answers that, and I don't want to make it up. Want to rephrase it for me?",
+            ]
+        return random.choice(options)
 
     @staticmethod
     def _evidence_note(evidence: dict[str, Any]) -> list[dict[str, Any]]:
@@ -2494,7 +2505,14 @@ remembered, researched, or did something unless the context supports it.
                 ),
             )
             if checked != final_text:
-                await on_delta(" Actually, let me correct that — " + checked, "concern")
+                # Do NOT re-send the corrected text as speech: the original
+                # has already streamed, so resending near-identical wording
+                # trips her duplicate-phrase guard and she ends up saying
+                # NOTHING at all — endless thinking tones with no voice.
+                # One short spoken retraction, and the corrected text is
+                # what gets stored.
+                LOG.warning("Grounding correction on a spoken answer: %r", checked[:90])
+                await on_delta(" Actually — I couldn't verify those details, so ignore that part.", "concern")
                 final_text = checked
             if (evidence.get("mode") != "brain-cache" and evidence.get("sources")
                     and getattr(self, "_last_answer_grounded", True)):
