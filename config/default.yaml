@@ -314,6 +314,10 @@ voice:
     # then returns to wake-word listening on silence.
     enabled: true
     window_seconds: 10.0
+    # A missed capture costs a retry, not the conversation: answering her
+    # quickly used to land in the post-speech deaf window and hang up.
+    silent_retries: 2
+    retry_window_seconds: 6.0
     question_window_seconds: 20.0
     max_turns: 40
     # follow-up speech must clearly exceed ambient; 1.8x the calibrated floor

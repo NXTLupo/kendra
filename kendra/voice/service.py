@@ -252,7 +252,7 @@ class VoiceService:
             # truth plus a short mic-tail guard. The estimate ran long and
             # ate her listening window, or ran short and let her own voice
             # be transcribed as Jonathan.
-            self._speaking_until = time.time() + 0.6
+            self._speaking_until = time.time() + 0.3
             return False
         cancel = threading.Event()
         monitor = asyncio.create_task(
@@ -271,7 +271,7 @@ class VoiceService:
             await speech
         if not monitor.done():
             await monitor
-        self._speaking_until = time.time() + 0.6
+        self._speaking_until = time.time() + 0.3
         return interrupted
 
     async def _stream_and_speak(self, user_text: str) -> dict[str, Any]:
@@ -529,18 +529,35 @@ class VoiceService:
         # and music sit near the base threshold and once self-triggered a
         # window loop where Kendra conversed with the stereo indefinitely.
         multiplier = float(self.settings.get("voice.followup.threshold_multiplier", 1.8))
+        # One empty capture used to end the conversation outright. Combined
+        # with the ~0.9 s her mic stays shut after she speaks, answering her
+        # quickly meant the opening words landed in the deaf window, the
+        # capture came back silent, and she hung up — "she turns her ears
+        # off". A miss now costs a retry, not the conversation.
+        silent_budget = int(self.settings.get("voice.followup.silent_retries", 2))
+        silent = 0
         for _ in range(max_turns):
             if result.get("end_conversation"):
                 return
-            # Silence OR filtered noise (music, typing captions) both mean
-            # nobody is talking to her: hand the floor back to the wake word.
-            if not str(result.get("heard") or "").strip() or not str(result.get("response") or "").strip():
-                return
-            asked_question = str(result.get("response") or "").strip().endswith("?")
+            heard = str(result.get("heard") or "").strip()
+            spoke = str(result.get("response") or "").strip()
+            if not heard or not spoke:
+                silent += 1
+                if silent > silent_budget:
+                    return  # genuinely nobody there; hand back to the wake word
+                # Listen again, briefly, without another spoken turn.
+                result = await self.one_turn(
+                    start_timeout=float(self.settings.get("voice.followup.retry_window_seconds", 6.0)),
+                    threshold_multiplier=multiplier,
+                )
+                continue
+            silent = 0
+            asked_question = spoke.endswith("?")
             window = question_window if asked_question else base_window
-            # brief grace so the speaker tail is not captured, then cue that
-            # she is still listening
-            await asyncio.sleep(0.3)
+            # Short grace only: the speaker has already stopped by here (the
+            # echo guard below is measured from actual playback end), and
+            # every extra tenth is a tenth she cannot hear him.
+            await asyncio.sleep(0.12)
             self.thinking_sounds.cue()
             result = await self.one_turn(start_timeout=window, threshold_multiplier=multiplier)
             if result.get("meet_person"):
