@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, session, shell } from "electron";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import { createInterface } from "node:readline";
@@ -393,4 +393,12 @@ app.on("before-quit", () => {
   for (const child of ownedModels) {
     if (!child.killed) child.kill("SIGTERM");
   }
+  // Quitting the app means Kendra is OFF on this machine: her services are
+  // independent processes (robot parity — the Pi has no app), so without
+  // this she kept listening, watching, and TALKING after the window died,
+  // which reads as haunted. Model servers stay resident (silent warm RAM);
+  // every sense and her voice stop. Desktop only — never ships to the Pi.
+  try {
+    execSync(`pkill -f -- '-m kendra --config .* service '`, { stdio: "ignore" });
+  } catch (_e) { /* nothing running is fine */ }
 });
