@@ -167,6 +167,39 @@ class LocalAudioCapture:
                         self.vad.threshold_rms = threshold
             self._device_ready = True
 
+
+    def _open_input_stream(self, sd, **kwargs):
+        """Open a microphone stream, recovering from CoreAudio wedges.
+
+        macOS PortAudio fails with -9986 ("Internal PortAudio error") when
+        input streams are opened and closed rapidly — which is exactly what
+        follow-up listening does. Kendra went fully deaf this way while every
+        service reported healthy. Back off, re-probe the device, and try
+        again rather than spinning on a dead handle.
+        """
+        last: Exception | None = None
+        for attempt in range(3):
+            try:
+                return sd.RawInputStream(**kwargs)
+            except Exception as exc:  # PortAudioError and friends
+                last = exc
+                LOG.warning("Microphone stream open failed (attempt %d): %s", attempt + 1, exc)
+                time.sleep(0.4 * (attempt + 1))
+                if attempt == 1:
+                    # Second failure: the cached device index may be stale.
+                    try:
+                        sd._terminate()
+                        sd._initialize()
+                    except Exception:
+                        LOG.debug("PortAudio reinit failed", exc_info=True)
+                    self._device_ready = False
+                    try:
+                        self._ensure_device(sd)
+                    except Exception:
+                        LOG.debug("device re-probe failed", exc_info=True)
+                    kwargs["device"] = self.device
+        raise RuntimeError(f"microphone unavailable after retries: {last}")
+
     def wait_for_wake(self, wake_provider, stop_provider=None, cancel_event: threading.Event | None = None) -> str:
         self._ensure_device()
         sd = self._sd()
@@ -176,13 +209,13 @@ class LocalAudioCapture:
         # arrived as "look..."). Keep ~1.2s so capture can seed from it.
         tail_blocks = max(1, int(1.2 * self.sample_rate / block))
         self.wake_tail = deque(maxlen=tail_blocks)
-        with sd.RawInputStream(
+        with self._open_input_stream(sd, **dict(
             samplerate=self.sample_rate,
             blocksize=block,
             device=self.device,
             channels=1,
             dtype="int16",
-        ) as stream:
+        )) as stream:
             while True:
                 if cancel_event is not None and cancel_event.is_set():
                     return "cancel"
@@ -228,13 +261,13 @@ class LocalAudioCapture:
         absolute_deadline = time.monotonic() + self.max_seconds
         silent_duration = 0.0
 
-        with sd.RawInputStream(
+        with self._open_input_stream(sd, **dict(
             samplerate=self.sample_rate,
             blocksize=block,
             device=self.device,
             channels=1,
             dtype="int16",
-        ) as stream:
+        )) as stream:
             overflow_blocks = 0
             while time.monotonic() < absolute_deadline:
                 data, _overflowed = stream.read(block)
