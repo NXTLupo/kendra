@@ -53,7 +53,17 @@ class ResearchService:
         cleaned = self._COMMAND_PREFIX.sub("", query.strip()).strip(" .!?")
         return cleaned if len(cleaned) >= 3 else query.strip(" .!?")
 
-    async def online_evidence(self, query: str) -> dict[str, Any]:
+    async def deep_evidence(self, query: str) -> dict[str, Any]:
+        """Always fetch full pages, never settle for snippets.
+
+        Used when a snippet-based answer failed its grounding check: search
+        snippets vary between calls, and a truncated intro often omits the
+        very date or name that was asked for. Rather than refuse a
+        well-known fact, go and read the page.
+        """
+        return await self.online_evidence(query, force_pages=True)
+
+    async def online_evidence(self, query: str, force_pages: bool = False) -> dict[str, Any]:
         max_results = int(self.settings.get("research.max_results", 5))
         max_pages = int(self.settings.get("research.max_pages", 2))
         per_source_chars = int(self.settings.get("research.per_source_chars", 2500))
@@ -86,7 +96,24 @@ class ResearchService:
             if item.snippet
         ]
         snippet_density = sum(len(s["snippet"]) for s in snippets)
-        if snippet_density >= int(self.settings.get("research.snippets_sufficient_chars", 400)):
+        # Volume is not the same as an answer. 891 chars of Wikipedia intro
+        # about the Eiffel Tower contained no year and no architect, so she
+        # answered from memory and her grounding check (rightly) refused it.
+        # If the question asks for a specific KIND of fact, the snippets must
+        # actually contain that kind of token or the pages get fetched.
+        blob = " ".join(s["snippet"] for s in snippets)
+        lowered = query.casefold()
+        needs: list[bool] = []
+        if re.search(r"\b(when|what year|how old|founded|built|created|born|died|started)\b", lowered):
+            needs.append(bool(re.search(r"\b(1[0-9]{3}|20[0-9]{2})\b", blob)))
+        if re.search(r"\b(who|whom|founder|designed|invented|wrote|directed|ceo)\b", lowered):
+            needs.append(bool(re.search(r"\b[A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}\b", blob)))
+        if re.search(r"\b(how many|how much|how tall|how far|how long|price|cost)\b", lowered):
+            needs.append(bool(re.search(r"\d", blob)))
+        specifics_present = all(needs) if needs else True
+        if not force_pages \
+                and snippet_density >= int(self.settings.get("research.snippets_sufficient_chars", 400)) \
+                and specifics_present:
             return {"mode": "online-snippets", "query": query, "sources": snippets}
 
         # Fetch candidate pages concurrently instead of serially: page fetches
@@ -141,6 +168,8 @@ class ResearchService:
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
         if method == "health":
             return {"ok": True}
+        if method == "deep":
+            return await self.deep_evidence(str(params["query"]))
         if method == "online":
             return await self.online_evidence(str(params["query"]))
         if method == "offline":

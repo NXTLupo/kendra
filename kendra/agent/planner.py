@@ -490,16 +490,138 @@ remembered, researched, or did something unless the context supports it.
         from datetime import UTC, datetime, timedelta
 
         cutoff = (datetime.now(UTC) - timedelta(minutes=45)).isoformat()
-        fresh = [
-            h for h in hits
-            if h.get("provenance") == "researched"
-            and str(h.get("created_at", "")) >= cutoff
-            and float(h.get("score", 0)) >= 0.35
-        ]
+        # Semantic score alone let NEWS memories answer "when was the Eiffel
+        # Tower built" — everything recent scores something. A cached answer
+        # must also share real subject words with the question, or she must
+        # go and actually search.
+        stop = {
+            "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is",
+            "was", "were", "are", "who", "what", "when", "where", "why", "how",
+            "did", "do", "does", "tell", "me", "you", "your", "look", "up",
+            "search", "research", "find", "out", "about", "can", "could",
+            "please", "kendra", "it", "its", "that", "this", "some", "any",
+        }
+        terms = {w for w in re.findall(r"[a-z0-9]+", query.casefold())
+                 if w not in stop and len(w) > 3}
+        fresh = []
+        for h in hits:
+            if h.get("provenance") != "researched":
+                continue
+            if str(h.get("created_at", "")) < cutoff:
+                continue
+            if float(h.get("score", 0)) < 0.35:
+                continue
+            content = str(h.get("content", "")).casefold()
+            if terms and not any(term in content for term in terms):
+                continue  # recent, but about something else entirely
+            fresh.append(h)
         return [
-            {"title": "from my research a few minutes ago", "note": str(h["content"])[:300]}
+            {"title": "something you already found out recently",
+             "note": str(h["content"])[:300]}
             for h in fresh[:3]
         ]
+
+    # Digits and multi-word proper names are where invention actually shows
+    # up. "Founded in 2006 by the Weil family" was pure fabrication while her
+    # own sources said "founded in 1990 by Leonard Lauder" — she had the
+    # right evidence and answered from memory anyway.
+    _HARD_NUMBER = re.compile(r"\b\d[\d,.]*\b")
+    _PROPER_NOUN = re.compile(r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})*\b")
+    # Capitalised words that mean nothing about groundedness.
+    _NOT_A_CLAIM = frozenset(
+        "i you he she it we they the a an and or but if then so this that these "
+        "those there here what when where why how who yes no okay kendra jonathan "
+        "monday tuesday wednesday thursday friday saturday sunday january february "
+        "march april may june july august september october november december "
+        "today tonight tomorrow yesterday according search results source sources "
+        "let me my your our their about from with into over under also just".split()
+    )
+
+    @classmethod
+    def _ungrounded_claims(cls, answer: str, evidence: dict[str, Any], user_text: str) -> list[str]:
+        """Specifics in her answer that appear nowhere in her evidence."""
+        haystack = " ".join(
+            [str(s.get("title", "")) + " " + str(s.get("snippet") or s.get("text") or "")
+             for s in (evidence or {}).get("sources", [])]
+        ).casefold()
+        if not haystack.strip():
+            return []  # no evidence at all is handled by the empty-evidence path
+        asked = user_text.casefold()
+        bad: list[str] = []
+        for number in cls._HARD_NUMBER.findall(answer):
+            clean = number.strip(".,")
+            if len(clean) >= 3 and clean.casefold() not in haystack and clean.casefold() not in asked:
+                bad.append(clean)
+        for noun in cls._PROPER_NOUN.findall(answer):
+            if noun.casefold() in cls._NOT_A_CLAIM or len(noun) < 4:
+                continue
+            head = noun.split()[0].casefold()
+            if head in cls._NOT_A_CLAIM:
+                continue
+            if noun.casefold() not in haystack and noun.casefold() not in asked:
+                bad.append(noun)
+        return sorted(set(bad))
+
+    async def _grounding_guard(self, answer: str, evidence: dict[str, Any],
+                               user_text: str, regenerate) -> str:
+        """Research answers may only contain what the sources actually say.
+
+        Generalises the fix that sky facts and news needed one topic at a
+        time: instead of trusting the model to obey "report only the
+        evidence", verify it. Every number and proper name in her answer
+        must appear in the retrieved text, otherwise it was invented.
+        """
+        bad = self._ungrounded_claims(answer, evidence, user_text)
+        if not bad:
+            self._last_answer_grounded = True
+            return answer
+        self._last_answer_grounded = False
+        LOG.warning("Ungrounded research claims %s in: %r", bad[:5], answer[:90])
+        try:
+            fresh = (await regenerate(bad)).strip()
+        except Exception:
+            fresh = ""
+        if fresh and not self._ungrounded_claims(fresh, evidence, user_text):
+            self._last_answer_grounded = True
+            return fresh
+        # Before refusing, go and READ the pages. Search snippets vary
+        # between calls and often omit the exact date or name asked for, so
+        # a grounding failure usually means thin evidence rather than a
+        # genuinely unknowable fact.
+        try:
+            from ..ipc import UnixJsonClient
+
+            research = UnixJsonClient(self.settings.socket_path("research"), timeout=60)
+            deeper = await asyncio.wait_for(
+                research.call("deep", {"query": user_text[:200]}), timeout=60
+            )
+        except Exception:
+            deeper = None
+        if isinstance(deeper, dict) and deeper.get("sources"):
+            try:
+                retry = (await regenerate(bad)).strip()
+            except Exception:
+                retry = ""
+            # Judge the retry against the RICHER evidence.
+            if retry and not self._ungrounded_claims(retry, deeper, user_text):
+                self._last_answer_grounded = True
+                return retry
+            if answer and not self._ungrounded_claims(answer, deeper, user_text):
+                self._last_answer_grounded = True
+                return answer  # the original was right; the snippets were just thin
+
+        # Still inventing: fall back to the sources themselves rather than
+        # letting a confident fabrication reach him.
+        titles = [str(s.get("title", "")).strip() for s in (evidence or {}).get("sources", [])[:2]]
+        # Brain-cache "sources" carry an internal label, not a real title;
+        # reading it aloud as a source ("what I actually found was:
+        # something you already found out recently") is nonsense.
+        titles = [x for x in titles if x and not x.startswith(("something you already", "from my research"))]
+        if titles:
+            return ("I don't want to guess on the details. What I actually found was: "
+                    + "; ".join(titles) + ". Want me to dig into one of those?")
+        return ("I couldn't confirm the specifics from what I found, so I'd rather not "
+                "guess. Want me to search different words?")
 
     @staticmethod
     def _evidence_note(evidence: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1763,7 +1885,26 @@ remembered, researched, or did something unless the context supports it.
                     max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
                 ),
             )
-            if evidence.get("mode") != "brain-cache" and evidence.get("sources"):
+            # Verify before she speaks: every number and name must come from
+            # the sources, not from memory.
+            final_text = await self._grounding_guard(
+                final_text, evidence if isinstance(evidence, dict) else {}, user_text,
+                lambda bad: self.llm.chat(
+                    evidence_messages + [{
+                        "role": "system",
+                        "content": (
+                            "STOP. These details are NOT in your evidence and you invented "
+                            f"them: {', '.join(bad[:6])}. Rewrite your answer using only "
+                            "facts that literally appear in the evidence above. If the "
+                            "evidence does not answer his question, say so plainly."
+                        ),
+                    }],
+                    temperature=0.3,
+                    max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
+                ),
+            )
+            if (evidence.get("mode") != "brain-cache" and evidence.get("sources")
+                    and getattr(self, "_last_answer_grounded", True)):
                 self._consolidate_research_soon(user_text, final_text, evidence, session_id)
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, autonomous=autonomous
@@ -2332,7 +2473,31 @@ remembered, researched, or did something unless the context supports it.
                 await on_delta(cleaned or lead_buffer, "curious")
             final_text = "".join(final_text_parts).strip() or "My search came back empty."
             final_text = capability_lead.sub("", self._FILLER_OPENER.sub("", final_text)).strip()
-            if evidence.get("mode") != "brain-cache" and evidence.get("sources"):
+            # Grounding check on the spoken path too. Streaming means the
+            # first phrases are already out loud, so a correction is spoken
+            # as a correction — which is honest, and far better than leaving
+            # an invented "founded in 2006 by the Weil family" standing.
+            checked = await self._grounding_guard(
+                final_text, evidence if isinstance(evidence, dict) else {}, user_text,
+                lambda bad: self.llm.chat(
+                    messages + [{
+                        "role": "system",
+                        "content": (
+                            "STOP. These details are NOT in your evidence and you invented "
+                            f"them: {', '.join(bad[:6])}. Rewrite using only facts that "
+                            "literally appear in the evidence. If it does not answer him, "
+                            "say so plainly."
+                        ),
+                    }],
+                    temperature=0.3,
+                    max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
+                ),
+            )
+            if checked != final_text:
+                await on_delta(" Actually, let me correct that — " + checked, "concern")
+                final_text = checked
+            if (evidence.get("mode") != "brain-cache" and evidence.get("sources")
+                    and getattr(self, "_last_answer_grounded", True)):
                 self._consolidate_research_soon(user_text, final_text, evidence, session_id)
             return await self._remember_plain_turn(
                 session_id, user_text, final_text, source=source, streamed=True
