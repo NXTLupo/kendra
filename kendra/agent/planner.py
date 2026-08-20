@@ -118,6 +118,12 @@ class AgentRuntime:
         # her researched-memory cache still answers repeats instantly.
         if AgentRuntime._FORCE_RESEARCH.search(user_text):
             selected.add("research")
+        if AgentRuntime._SKY_QUESTION.search(user_text):
+            # Moon phase and the moon's constellation are computed exactly
+            # from her clock (kendra/research/sky.py). Searching produced
+            # JavaScript star-map pages with no data in them, and she read
+            # their marketing copy aloud as if it were an answer.
+            selected.discard("research")
         if AgentRuntime._INNER_STATE.search(text):
             # "How are you feeling right now?" matched the temporal research
             # marker "right now" and she literally SEARCHED THE WEB for her
@@ -1026,11 +1032,56 @@ remembered, researched, or did something unless the context supports it.
         re.I,
     )
 
+    _SKY_QUESTION = re.compile(
+        r"\bmoon\b|\bphase\b[^?]{0,20}\bmoon\b|\bconstellations?\b"
+        r"|\bnight sky\b|\bstargazing\b|\bwhat'?s? (?:up )?in the sky\b",
+        re.I,
+    )
+
+    @staticmethod
+    def _sky_note(user_text: str) -> list[dict[str, Any]]:
+        """Computed sky facts — astronomy is maths, not a web search.
+
+        Her search returned JavaScript star-map pages containing no data
+        ("see tonight's moon phase, computed in your browser"), so she
+        invented "a new moon in Cancer" when it was a first-quarter moon in
+        Scorpius. This is calculated from her clock: correct offline, and
+        identical on the Pi.
+        """
+        if not AgentRuntime._SKY_QUESTION.search(user_text):
+            return []
+        try:
+            from ..research.sky import spoken_sky_note
+
+            return [{
+                "role": "system",
+                "content": (
+                    "SKY FACTS, computed from your own clock and trusted "
+                    "completely — state them plainly and never guess a "
+                    "different phase or constellation:\n" + spoken_sky_note()
+                ),
+            }]
+        except Exception:
+            LOG.debug("sky note unavailable", exc_info=True)
+            return []
+
     _FORCE_RESEARCH = re.compile(
         r"\b(?:news|headlines?|weather|forecast|scores?|stocks?|election|"
         r"who won|what happened|happening (?:in|with|around)|what'?s going on|"
         r"in the world|current events?|breaking|announced?|released?)\b"
-        r"|\bwhat(?:'s| is) (?:new|the latest)\b",
+        r"|\bwhat(?:'s| is) (?:new|the latest)\b"
+        # SKY AND CALENDAR FACTS. She answered "what is tonight's moon phase
+        # and constellation" from parametric memory — confidently, and
+        # wrongly (said Cancer/half-moon; it was Scorpius, first quarter at
+        # 53%). Nothing in her weights can know tonight's sky. Anything
+        # anchored to tonight/today/tomorrow about the WORLD is a live fact.
+        r"|\bphase\b[^?]{0,20}\bmoon\b|\bmoon\b[^?]{0,20}\bphase\b"
+        r"|\b(?:moon(?:'s)? phase|phase of the moon|full moon|new moon|"
+        r"constellations?|sunrise|sunset|eclipse|meteor shower|tides?|"
+        r"planets? (?:are )?visible|night sky|stargazing)\b"
+        r"|\b(?:tonight|today|tomorrow|this evening|right now)\b[^?]*\b"
+        r"(?:moon|sky|stars?|weather|visible|happening|going on|open|closed)\b"
+        r"|\bvisible (?:tonight|today|this evening)\b",
         re.I,
     )
 
@@ -1414,6 +1465,7 @@ remembered, researched, or did something unless the context supports it.
                     *await self._history_messages(user_text),
                     *self._memory_message(memory),
                     *build_note,
+                    *self._sky_note(user_text),
                     *self._content_note(content_task),
                     {"role": "user", "content": user_text},
                 ],
@@ -1432,6 +1484,7 @@ remembered, researched, or did something unless the context supports it.
                 },
                 *await self._history_messages(user_text),
                 *self._memory_message(memory),
+                *self._sky_note(user_text),
                 *self._content_note(content_task),
                 {"role": "user", "content": user_text},
             ]

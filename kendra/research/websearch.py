@@ -94,9 +94,26 @@ class DuckDuckGoLiteClient:
     _RSS_ITEM = re.compile(r"<item>.*?<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>.*?<link>(.*?)</link>", re.S)
 
     async def _news_rss(self, query: str, limit: int) -> list[SearchResult]:
+        # Words that carry no topic. Leaving fragments behind turned
+        # "what's in the news" into a Google News SEARCH for "what s in",
+        # which returned university essays titled "What's In a Face?"
+        # instead of the day's actual headlines.
+        chatter = {
+            "news", "headlines", "headline", "top", "today", "todays", "tonight",
+            "the", "for", "latest", "current", "me", "read", "what", "whats", "s",
+            "is", "are", "in", "on", "of", "any", "anything", "tell", "give",
+            "show", "going", "happening", "happened", "world", "there", "some",
+            "story", "stories", "big", "important", "main", "right", "now",
+            "you", "your", "please", "kendra", "about", "up", "date", "a", "an",
+            "and", "to", "do", "does", "did", "can", "could", "would", "know",
+            "hear", "heard", "say", "said", "new", "recent", "recently",
+        }
         topic_words = [w for w in re.findall(r"[a-z0-9]+", query.casefold())
-                       if w not in {"news", "headlines", "headline", "top", "today", "todays",
-                                    "the", "for", "latest", "current", "me", "read"}]
+                       if w not in chatter and len(w) > 2]
+        # A real topic needs substance. Anything vaguer is a request for the
+        # day's front page, which is the top-stories feed.
+        if len(topic_words) < 1 or not any(len(w) >= 4 for w in topic_words):
+            topic_words = []
         if topic_words:
             url = "https://news.google.com/rss/search?q=" + "+".join(topic_words) + "&hl=en-US&gl=US&ceid=US:en"
         else:
