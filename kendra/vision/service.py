@@ -739,6 +739,34 @@ class VisionService:
         except Exception:
             LOG.debug("Movement comment unavailable", exc_info=True)
 
+    async def _vlm_warm_keeper(self) -> None:
+        """Keep Moondream's compute graphs permanently warm.
+
+        The 40s first-request graph compile used to be paid once at vision-
+        service boot — but the VLM server restarts on its own schedule (app
+        relaunch, OOM, updates), and the next person to pay the compile was
+        Jonathan, mid-question ("deep sight is still waking up"). A tiny
+        64px describe every few idle minutes absorbs recompiles invisibly.
+        """
+        interval = float(self.settings.get("vision.warm_keeper_seconds", 180))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                if time.time() - getattr(self, "_last_semantic_at", 0.0) < interval:
+                    continue  # real work is keeping it warm already
+                recent = await self.brain.rpc.call(
+                    "recent_turns", {"limit": 1, "max_age_seconds": 90}
+                )
+                if recent:
+                    continue  # never contend with conversation
+                started = time.time()
+                await self._warm_ping()
+                took = time.time() - started
+                if took > 10.0:
+                    LOG.info("VLM warm ping absorbed a cold start (%.1fs)", took)
+            except Exception:
+                LOG.debug("VLM warm ping skipped", exc_info=True)
+
     async def _ambient_loop(self) -> None:
         """Her idle gaze: the world she watches becomes memory on its own.
 
@@ -781,22 +809,33 @@ class VisionService:
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
             ]}],
         }
+        self._warm_payload = payload
+        self._warm_endpoint = endpoint
         for _attempt in range(30):
             try:
-                async with httpx.AsyncClient(timeout=240) as client:
-                    response = await client.post(f"{endpoint}/chat/completions", json=payload)
-                if response.status_code == 200:
-                    LOG.info("VLM graph warmed at startup")
-                    return
+                await self._warm_ping()
+                LOG.info("VLM graph warmed at startup")
+                return
             except Exception:
                 pass
             await asyncio.sleep(10)
+
+    async def _warm_ping(self) -> None:
+        payload = getattr(self, "_warm_payload", None)
+        endpoint = getattr(self, "_warm_endpoint", None)
+        if not payload or not endpoint:
+            raise RuntimeError("warm payload not prepared yet")
+        async with httpx.AsyncClient(timeout=240) as client:
+            response = await client.post(f"{endpoint}/chat/completions", json=payload)
+        response.raise_for_status()
 
     async def run(self) -> None:
         ambient = asyncio.create_task(self._ambient_loop())
         ambient.add_done_callback(lambda _t: None)
         warm = asyncio.create_task(self._warm_vlm())
         warm.add_done_callback(lambda _t: None)
+        keeper = asyncio.create_task(self._vlm_warm_keeper())
+        keeper.add_done_callback(lambda _t: None)
         await self.server.serve_forever()
 
 

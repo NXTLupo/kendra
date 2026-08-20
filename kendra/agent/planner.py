@@ -743,6 +743,17 @@ remembered, researched, or did something unless the context supports it.
                 timings["kind"] = "sight"
                 timings["sight_s"] = round(time.monotonic() - look_started, 1)
         except TimeoutError:
+            stale = str(getattr(self, "_last_scene_text", "") or "")
+            stale_at = float(getattr(self, "_last_scene_at", 0.0))
+            if stale and time.time() - stale_at < 180:
+                # Deep look is grinding, but she saw the room moments ago —
+                # answer from that with honest framing instead of stalling.
+                observation["visual_scene"] = stale[:600]
+                observation["visual_scene_age_note"] = (
+                    "this description is from a few moments ago; the fresh "
+                    "look is still processing — say so naturally"
+                )
+                return
             observation["visual_scene_error"] = (
                 "your deep sight is still processing and did not finish in time — "
                 "say so honestly and offer to try again"
@@ -756,6 +767,8 @@ remembered, researched, or did something unless the context supports it.
         description = str(visual.get("description") or "").strip()
         if description:
             observation["visual_scene"] = description[:600]
+            self._last_scene_text = description
+            self._last_scene_at = time.time()
         observation["people_in_view"] = visual.get("people_in_view")
         observation["people_count_rule"] = (
             "people_in_view comes from your face detector and is authoritative; "
