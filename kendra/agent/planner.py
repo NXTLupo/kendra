@@ -997,9 +997,13 @@ remembered, researched, or did something unless the context supports it.
     )
 
     _HARD_QUESTION = re.compile(
-        r"\b(why|how come|explain|reason|figure out|work out|calculate|math|"
-        r"prove|compare|trade[- ]?off|pros and cons|analy[sz]e|think (about|through)|"
-        r"deep(ly)? |carefully|step by step)\b",
+        # Analytical asks only. "think about" was here and matched Jonathan's
+        # "what have you been thinking about lately?" — introspective CHAT —
+        # switching on a 512-token hidden reasoning budget: 30.6s for small
+        # talk. Contemplation is conversation; thinking mode is for problems.
+        r"\b(why exactly|how come|explain (?:why|how)|figure out|work out|"
+        r"calculate|math|prove|compare|trade[- ]?off|pros and cons|"
+        r"analy[sz]e|step by step|think (?:this |it )?through)\b",
         re.I,
     )
 
@@ -1139,6 +1143,8 @@ remembered, researched, or did something unless the context supports it.
         re.I,
     )
 
+    _SELF_REFERENCE = re.compile(r"\b(?:I|I'm|I am|my|me)\b[^.!?]{0,60}", re.I)
+
     def _robot_register_score(self, text: str) -> int:
         """How machine-like a reply sounds, without enumerating phrasings.
 
@@ -1147,7 +1153,13 @@ remembered, researched, or did something unless the context supports it.
         Counting register vocabulary generalizes: living speech about music
         or feelings scores 0-1; diagnostics-speak scores 2+.
         """
-        return len(self._ROBOT_WORDS.findall(text or ""))
+        # Only SELF-descriptions count: "I process input" is the disease;
+        # "emergent behavior in complex systems" is her genuinely musing
+        # about the world, and regenerating that punished intelligence.
+        score = 0
+        for clause in self._SELF_REFERENCE.findall(text or ""):
+            score += len(self._ROBOT_WORDS.findall(clause))
+        return score
 
     async def _act_guard(self, final_text: str, regenerate) -> str:
         """She already acted; the reply must not offer to act.
@@ -1336,44 +1348,49 @@ remembered, researched, or did something unless the context supports it.
             )
         if not final_text:
             final_text = "I'm here."
-        # Register guard on the MAIN chat path: it only ran on tool paths,
-        # so "I'm processing the input / I process the world through data"
-        # sailed straight to the speaker from ordinary conversation.
+
+        # ONE regeneration budget for ALL guards on this turn. Guards used to
+        # each regenerate independently with prefix-busting prompts — up to
+        # four full prefills per turn, which is what "she died again" was:
+        # 90s+ turns of guard cascade. The regen prompt reuses the standard
+        # cached prefix (charter+exemplars+history) so a retry costs ~2-4s.
+        regen_left = {"n": 1}
+        history = await self._history_messages(user_text)
+
+        def budgeted_regen(note: str):
+            async def go() -> str:
+                if regen_left["n"] <= 0:
+                    return ""
+                regen_left["n"] -= 1
+                return await self.llm.chat(
+                    [
+                        {"role": "system", "content": self._conversation_prompt()},
+                        *self._style_exemplars(),
+                        *history,
+                        {"role": "system", "content": note},
+                        {"role": "user", "content": user_text},
+                    ],
+                    temperature=0.85,
+                    max_tokens=self._answer_budget(content_task),
+                    id_slot=self.CONVERSATION_SLOT,
+                )
+            return go
+
         final_text = await self._act_guard(
             final_text,
-            lambda: self.llm.chat(
-                [
-                    {"role": "system", "content": self._conversation_prompt()},
-                    {"role": "system", "content": (
-                        "Answer as Kendra the living companion — warm, plain, first-person "
-                        "feelings and opinions. NEVER mention processing, systems, sensors, "
-                        "data, networks, or being a machine."
-                    )},
-                    {"role": "user", "content": user_text},
-                ],
-                temperature=0.85,
-                max_tokens=self._answer_budget(content_task),
-                id_slot=self.CONVERSATION_SLOT,
+            budgeted_regen(
+                "Answer as Kendra the living companion — warm, plain, first-person "
+                "feelings and opinions. NEVER mention processing, systems, sensors, "
+                "data, networks, or being a machine."
             ),
         )
-        # This path never commands her legs, so any claim of motion in it is
-        # fiction by construction.
         final_text = await self._movement_claim_guard(
             final_text,
             moved=False,
-            regenerate=lambda: self.llm.chat(
-                [
-                    {"role": "system", "content": self._conversation_prompt()},
-                    {"role": "system", "content": (
-                        "You did NOT move and you are not moving. Never claim to walk, "
-                        "move, or come over unless Jonathan gave you a movement command. "
-                        "Answer his message honestly instead."
-                    )},
-                    {"role": "user", "content": user_text},
-                ],
-                temperature=0.8,
-                max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
-                id_slot=self.CONVERSATION_SLOT,
+            regenerate=budgeted_regen(
+                "You did NOT move and you are not moving. Never claim to walk, move, "
+                "or come over unless Jonathan gave you a movement command. Answer his "
+                "message honestly instead."
             ),
         )
         return await self._remember_plain_turn(
@@ -1383,7 +1400,6 @@ remembered, researched, or did something unless the context supports it.
             source=source,
             autonomous=autonomous,
         )
-
     async def turn(
         self,
         user_text: str,
