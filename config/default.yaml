@@ -317,7 +317,12 @@ voice:
     # the fallback when calibration is off.
     auto_calibrate: true
     start_timeout_seconds: 3.0
-    silence_seconds: 0.8
+    # 0.8s cut him off mid-sentence: a natural thinking pause ("I think...
+    # we should try") exceeded it, so she answered fragments and her replies
+    # read as nonsense. Every capture in the failing transcript was 1.2-2.8s.
+    # 1.6s survives a pause; end-of-turn still feels immediate because the
+    # phrase-streamed reply starts before she has finished thinking.
+    silence_seconds: 1.6
   capture:
     # auto probes every input device and picks the one carrying a live signal.
     # Never trust the OS default: on the dev iMac it was a USB guitar amp that

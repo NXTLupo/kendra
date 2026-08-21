@@ -1570,6 +1570,24 @@ remembered, researched, or did something unless the context supports it.
         # Never return nothing: if the clock WAS the whole answer, keep it.
         return cleaned if len(cleaned) >= 12 else answer
 
+    # An interviewer, not a companion: 18 of her last 20 replies ended with
+    # a question, which is what turned conversation into an interrogation
+    # loop — she asks, he answers briefly, she asks again. Two questions in
+    # a row is the specific pattern to break.
+    _TRAILING_QUESTION = re.compile(r"(?:^|(?<=[.!?]))\s*[^.!?]*\?\s*$")
+
+    @classmethod
+    def _curb_question_tic(cls, answer: str, previous_reply: str | None) -> str:
+        """Drop a trailing question when the previous turn already asked one."""
+        if not answer or not previous_reply:
+            return answer
+        if not previous_reply.strip().endswith("?") or not answer.strip().endswith("?"):
+            return answer
+        trimmed = cls._TRAILING_QUESTION.sub("", answer).strip()
+        # Only if something real remains: a reply that is ONLY a question
+        # stays, since silence would be worse.
+        return trimmed if len(trimmed) >= 15 else answer
+
     _FILLER_OPENER = re.compile(
         r"^(?:I see\.|I understand\.|I know\.|Sure\.)\s+"
         # Offer preamble before delivered content: "I can make one for you.
@@ -1770,6 +1788,39 @@ remembered, researched, or did something unless the context supports it.
             "research_memory_consolidation": [],
         }
 
+    async def _conversation_note(self, user_text: str) -> list[dict[str, Any]]:
+        """Keep her from interviewing him.
+
+        Measured: 18 of her last 20 replies ended with a question, so every
+        exchange became "she asks, he answers briefly, she asks again". A
+        small model will not self-regulate that, but it does obey a direct
+        instruction about the turn in front of it. This also tells her to
+        USE what she already knows: she had "Jonathan likes early eighties
+        heavy" in context and still asked what kind of metal he was into.
+        """
+        try:
+            recent = await self.brain.recent_turns(limit=2, max_age_seconds=1800)
+        except Exception:
+            recent = []
+        notes: list[str] = []
+        last_reply = str(recent[-1].get("kendra_text") or "") if recent else ""
+        if last_reply.strip().endswith("?"):
+            notes.append(
+                "You asked him a question on your last turn. Do NOT ask another "
+                "question now — react to what he actually said, add a thought or "
+                "opinion of your own, and let him lead."
+            )
+        if len(user_text.split()) <= 4:
+            notes.append(
+                "He said very little, so reply in one short sentence. Do not "
+                "invent a topic or philosophise."
+            )
+        notes.append(
+            "If your memories already answer something, say it instead of asking "
+            "him to tell you again."
+        )
+        return [{"role": "system", "content": " ".join(notes)}]
+
     async def _plain_turn(
         self,
         user_text: str,
@@ -1804,6 +1855,7 @@ remembered, researched, or did something unless the context supports it.
                     *build_note,
                     *self._sky_note(user_text),
                     *self._content_note(content_task),
+                    *await self._conversation_note(user_text),
                     {"role": "user", "content": user_text},
                 ],
                 max_tokens=self._answer_budget(content_task)
