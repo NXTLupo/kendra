@@ -13,6 +13,14 @@ import numpy as np
 
 from ..config import Settings
 from ..paths import resolve_path
+from .embeddings import (
+    EmbeddingProvider,
+    HashingEmbeddingProvider,
+    OnnxMiniLMEmbeddingProvider,
+    Qwen3OnnxEmbeddingProvider,
+    SentenceTransformerEmbeddingProvider,
+    cosine_similarity,
+)
 
 # Words that carry no subject matter: pronouns, function words, fillers and
 # bare numerals. Overlap on these means two sentences look alike, not that
@@ -41,15 +49,6 @@ def _content_words(text: str) -> frozenset[str]:
         word for word in re.findall(r"[a-z][a-z-]{2,}", flat)
         if word not in _EMPTY_WORDS
     )
-
-from .embeddings import (
-    EmbeddingProvider,
-    HashingEmbeddingProvider,
-    OnnxMiniLMEmbeddingProvider,
-    Qwen3OnnxEmbeddingProvider,
-    SentenceTransformerEmbeddingProvider,
-    cosine_similarity,
-)
 
 
 def now_iso() -> str:

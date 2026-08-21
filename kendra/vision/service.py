@@ -446,9 +446,6 @@ class VisionService:
             encoded = base64.b64encode(buffer.tobytes()).decode("ascii") if ok else base64.b64encode(image_path.read_bytes()).decode("ascii")
         else:
             encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-        perspective = str(
-            self.settings.get("vision.semantic_perspective", self.DEFAULT_PERSPECTIVE)
-        )
         # NO persona preamble. Moondream is a visual question-answerer, not
         # an actor: with "You are Kendra, a robot companion..." in front of
         # the question it answered "Kendra" to "what is the person wearing?"
