@@ -57,6 +57,13 @@ def _normalize_confidence(payload: dict) -> dict:
     return payload
 
 
+_IMPERATIVE = re.compile(
+    r"^(?:hey\s+\w+[,\s]+)?(?:please\s+)?(?:can|could|would|will)?\s*(?:you\s+)?"
+    r"(?:take a look|look|show|tell|find|search|research|check|read|play|"
+    r"go|come|walk|turn|stop|remember this|write|make|give|explain)\b",
+    re.I,
+)
+
 _WONDERING = re.compile(r"^i\s+(?:found myself\s+)?wonder(?:ed|ing)?\b", re.I)
 
 
@@ -70,10 +77,55 @@ class BrainConsolidator:
         self.min_chars = int(settings.get("brain.consolidation_min_chars", 24))
 
     @staticmethod
+    @staticmethod
+    def _third_person(content: str, subject: str | None) -> str:
+        """Rewrite a first-person memory so its subject is explicit."""
+        name = (subject or "Jonathan").strip() or "Jonathan"
+        if name.casefold() in {"kendra", "self", "me"}:
+            return content
+        text = str(content).strip()
+        replacements = (
+            (r"^i'?m\b", f"{name} is"),
+            (r"^i am\b", f"{name} is"),
+            (r"^i've\b", f"{name} has"),
+            (r"^i have\b", f"{name} has"),
+            (r"^i\b", name),
+            (r"^my\b", f"{name}'s"),
+            (r"^mine\b", f"{name}'s"),
+        )
+        for pattern, replacement in replacements:
+            new_text = re.sub(pattern, replacement, text, count=1, flags=re.I)
+            if new_text != text:
+                return new_text
+        return text
+
+    @staticmethod
     def _quote_supported(quote: str | None, user_text: str) -> bool:
+        """Is the quoted evidence really in what he said?
+
+        Exact substring matching threw away true facts over trivia: he said
+        "I'm actually fifty five years old" and the extractor quoted
+        "fifty-five", so the memory was discarded and she went on guessing
+        his age. The point of this check is to stop INVENTED evidence, not
+        to police punctuation — so compare on content words instead, and
+        require that essentially all of the quote's words really occur in
+        his sentence.
+        """
         if not quote or len(quote.strip()) < 3:
             return False
-        return quote.strip().casefold() in user_text.casefold()
+        if quote.strip().casefold() in user_text.casefold():
+            return True
+
+        def words(value: str) -> list[str]:
+            flat = str(value).casefold().replace("'", "").replace("\u2019", "")
+            flat = flat.replace("-", " ")
+            return re.findall(r"[a-z0-9]+", flat)
+
+        quoted, said = words(quote), set(words(user_text))
+        if not quoted:
+            return False
+        overlap = sum(1 for word in quoted if word in said) / len(quoted)
+        return overlap >= 0.8
 
     async def consolidate_turn(self, user_text: str, kendra_text: str, session_id: str | None) -> dict[str, Any]:
         if len(user_text.strip()) < self.min_chars:
@@ -121,6 +173,13 @@ KENDRA RESPONSE FOR CONTEXT ONLY; DO NOT TREAT AS EVIDENCE:
             ):
                 rejected.append("memory_echoed_from_kendra_response")
                 continue
+            if item.content and _IMPERATIVE.match(item.content.strip()):
+                # An instruction is not a fact. "Take a look at my tattoo"
+                # and "Research the top five headlines" were being stored as
+                # things she knows about Jonathan, then retrieved as
+                # evidence — which is how one topic bled into the next.
+                rejected.append("memory_is_a_command")
+                continue
             if item.content and _WONDERING.match(item.content.strip()):
                 # Her own unanswered musings were stored as knowledge and
                 # then OUTRANKED real facts: 62 copies of "I found myself
@@ -142,15 +201,45 @@ KENDRA RESPONSE FOR CONTEXT ONLY; DO NOT TREAT AS EVIDENCE:
                 item.subject = item.subject or "Kendra"
                 item.supersede_conflict = True
                 item.confidence = min(item.confidence, 0.6)
-            if item.provenance == "user_stated":
-                if not self._quote_supported(item.evidence_quote, user_text):
+            # The model labels provenance in its own words, and a label
+            # mismatch was silently DESTROYING facts Jonathan stated: "I'm
+            # actually fifty five" came back tagged provenance "user" and
+            # was thrown away, so she kept guessing his age. Normalise the
+            # obvious synonyms instead of discarding knowledge over spelling.
+            provenance = str(item.provenance or "").strip().casefold()
+            if provenance in {"user", "user_said", "user-stated", "userstated",
+                              "stated", "explicit", "direct", "observed_user"}:
+                provenance = "user_stated"
+            elif provenance in {"inference", "infer", "guess", "assumed", "implied"}:
+                provenance = "inferred"
+            item.provenance = provenance
+            if provenance == "user_stated":
+                # evidence_quote is optional in the schema, so grammar-
+                # constrained decoding usually omits it — and requiring it
+                # silently destroyed every fact Jonathan stated, which is
+                # why she kept guessing his age after being told. The quote
+                # is a convenience; the real test is whether the memory is
+                # grounded in his words, so fall back to the content itself.
+                grounded = self._quote_supported(item.evidence_quote, user_text) or \
+                    self._quote_supported(item.content, user_text)
+                if not grounded:
                     rejected.append("unsupported_user_stated")
                     continue
-            elif item.provenance == "inferred":
+            elif provenance == "inferred":
                 item.confidence = min(item.confidence, 0.65)
+            elif provenance in {"researched", "observed"}:
+                pass  # legitimate sources with their own validation upstream
             else:
                 rejected.append(f"invalid_turn_provenance:{item.provenance}")
                 continue
+            # PERSPECTIVE. A memory is read back inside HER prompt, so a
+            # first-person sentence becomes ambiguous: "I'm actually fifty
+            # five years old" reads as Kendra's own age, and she answered
+            # "you are 38". Facts about a person are stored naming that
+            # person, whoever they are.
+            if provenance == "user_stated":
+                item.content = self._third_person(item.content, item.subject)
+
             memory_id = self.store.remember(
                 kind=item.kind,
                 content=item.content,

@@ -13,6 +13,35 @@ import numpy as np
 
 from ..config import Settings
 from ..paths import resolve_path
+
+# Words that carry no subject matter: pronouns, function words, fillers and
+# bare numerals. Overlap on these means two sentences look alike, not that
+# they are about the same thing.
+_EMPTY_WORDS = frozenset(
+    "i im you your yours we us our they them he she it its is am are was "
+    "were be been being do does did doing done have has had having a an the "
+    "of to in on at for with from by about as if then than that this these "
+    "those and or but not no yes so just really very much many more most "
+    "what when where why how who whom which can could would should will may "
+    "might must me my mine here there now today tonight okay well like "
+    "get got go going come came say said tell told think thought know knew "
+    "actually basically literally kind sort stuff thing things bit lot some "
+    "again still even also maybe perhaps probably definitely sure right left "
+    "one two three four five six seven eight nine ten hundred thousand".split()
+)
+
+
+def _content_words(text: str) -> frozenset[str]:
+    """The words in a phrase that actually carry subject matter."""
+    # Apostrophes are stripped first so contractions collapse onto their
+    # plain forms ("i'm" -> "im"), otherwise every "I'm ..." sentence looks
+    # like it shares a content word with every other one.
+    flat = str(text).casefold().replace("'", "").replace("\u2019", "")
+    return frozenset(
+        word for word in re.findall(r"[a-z][a-z-]{2,}", flat)
+        if word not in _EMPTY_WORDS
+    )
+
 from .embeddings import (
     EmbeddingProvider,
     HashingEmbeddingProvider,
@@ -305,6 +334,21 @@ class BrainStore:
             # semantic scores and the freshest memories flood every prompt —
             # a moon-phase question was answered through Raspberry Pi facts.
             if semantic < 0.18 and rank is None:
+                continue
+            # SHARED SUBJECT MATTER. Sentence embeddings score surface shape,
+            # and FTS5 happily matches "five", "I'm" and "tell me about" — so
+            # both signals fire on memories that are about something else
+            # entirely. Measured: "I'm buying a Raspberry Pi FIVE" scored
+            # 0.541 against "I'm actually fifty five", and "How are you
+            # doing?" scored 0.637 against "how old do you think I am",
+            # HIGHER than "how old are you?". Those answers then bled the
+            # previous topic into the next one. A memory must therefore share
+            # at least one content word with the question; only a strongly
+            # semantic match (>= 0.72) is exempt, since real paraphrases
+            # share meaning without sharing vocabulary.
+            if semantic < 0.72 and not (
+                _content_words(query) & _content_words(str(row["content"]))
+            ):
                 continue
             salience = float(row["salience"])
             confidence = float(row["confidence"])
@@ -612,7 +656,13 @@ class BrainStore:
         exclude_kinds: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         excluded = {str(kind) for kind in (exclude_kinds or [])}
-        hits = self.search(query, limit=limit)
+        # Over-fetch when kinds will be dropped. Filtering AFTER the cut let
+        # excluded kinds consume every slot: "How old am I?" returned four
+        # conversation episodes, all of them filtered out, leaving her with
+        # no memories at all — so she invented an age while the real fact
+        # sat one rank below the cut.
+        fetch = limit * 5 if excluded else limit
+        hits = self.search(query, limit=fetch)
         # Slot-store tier first (ELC): exact-match typed facts are the
         # cheapest, most reliable recall — they ride ahead of semantic hits.
         memories: list[dict[str, Any]] = self.fact_lookup(query, limit=2)
@@ -629,6 +679,8 @@ class BrainStore:
                 break
             memories.append(item)
             used += size
+            if len(memories) >= limit:
+                break  # over-fetch was for filtering headroom, not output
         context = {
             "memories": memories,
             "interests": self.interests(),

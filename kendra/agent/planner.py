@@ -325,8 +325,12 @@ remembered, researched, or did something unless the context supports it.
         # prefix): asking the internet what time it is was how "what time is
         # it" became a thunderstorm forecast.
         now_line = time.strftime(
-            "YOUR CLOCK (exact, trusted, answer time/date questions directly from it): "
-            "%I:%M %p %Z on %A, %B %d, %Y. Answer time questions with this immediately; never offer to check."
+            # A bare fact, not prose. Every instruction written here came
+            # back out of her mouth verbatim — "It is not my birthday or a
+            # scheduled event" was my own note being recited at Jonathan.
+            # Injected context must be DATA; the behaviour rules live in the
+            # charter, where they are stable and not quotable as an answer.
+            "Current date and time: %I:%M %p %Z, %A %B %d %Y."
         )
         if not items:
             return [{"role": "system", "content": now_line}]
@@ -334,7 +338,10 @@ remembered, researched, or did something unless the context supports it.
             {
                 "role": "system",
                 "content": (
-                    f"{now_line}\nRelevant local memories:\n"
+                    f"{now_line}\nRelevant local memories (these name people "
+                    f"explicitly; Jonathan is the person talking to you, so a memory "
+                    f"about Jonathan is a memory about the person saying 'I' and "
+                    f"'my' — answer him with it):\n"
                     f"{json.dumps(items, separators=(',', ':'), ensure_ascii=False)}"
                 ),
             }
@@ -740,6 +747,53 @@ remembered, researched, or did something unless the context supports it.
             return fresh
         return ("I had a look, but I can't make that out clearly enough to say. "
                 "Here's what I can see: " + scene[:180])
+
+    _ABOUT_HIM = re.compile(r"\b(my|mine|me|i|i'?m|am i|do i|did i|have i)\b", re.I)
+
+    async def _personal_fact_guard(self, answer: str, memory: dict[str, Any],
+                                   user_text: str, regenerate) -> str:
+        """Facts about a person must come from memory, never from invention.
+
+        The prompt was verified correct — "Jonathan is actually fifty five
+        years old" sat plainly in her context — and a 1.7B model still
+        answered "you are thirty three" and invented a source for it.
+        Asking the model more firmly does not fix that; checking does. When
+        he asks about himself and her memories carry the answer, any number
+        she states must appear in those memories or in his own words.
+        """
+        if not answer or not self._ABOUT_HIM.search(user_text or ""):
+            return answer
+        memories = (memory or {}).get("memories") or []
+        if not memories:
+            return answer
+        evidence = {"sources": [
+            {"title": "memory", "snippet": str(m.get("content", ""))} for m in memories
+        ]}
+        haystack = " ".join(s["snippet"] for s in evidence["sources"]).casefold()
+        asked = (user_text or "").casefold()
+        invented = [
+            number for number in self._HARD_NUMBER.findall(answer)
+            if len(number.strip(".,")) >= 2
+            and number.strip(".,").casefold() not in haystack
+            and number.strip(".,").casefold() not in asked
+        ]
+        # Spelled-out numbers matter just as much as digits here.
+        words = {"twenty", "thirty", "forty", "fifty", "sixty", "seventy",
+                 "eighty", "ninety", "hundred"}
+        for word in re.findall(r"[a-z]+", answer.casefold()):
+            if word in words and word not in haystack and word not in asked:
+                invented.append(word)
+        if not invented:
+            return answer
+        LOG.warning("Invented personal facts %s in: %r", invented[:4], answer[:80])
+        try:
+            fresh = (await regenerate(invented)).strip()
+        except Exception:
+            fresh = ""
+        if fresh:
+            return fresh
+        return ("I don't want to guess about you. What I have written down is: "
+                + "; ".join(str(m.get("content", ""))[:90] for m in memories[:2]))
 
     async def _movement_claim_guard(self, final_text: str, moved: bool, regenerate) -> str:
         """She may never say she moved when her legs never moved.
@@ -1437,6 +1491,29 @@ remembered, researched, or did something unless the context supports it.
         r"|\bconfidence (?:of |level |score )?\d|\b\d+(?:\.\d+)?\s?%?\s?confidence\b",
         re.I,
     )
+    # Injected context must not be recited. The clock rides in every prompt,
+    # and a 1.7B model narrates it inside unrelated answers no matter how
+    # firmly the note says not to ("How old am I?" -> "the time says 4:40 PM
+    # PDT on Thursday, August 20, 2026, that makes me think you are 55").
+    # Asking the model was unreliable; removing it afterwards is not.
+    _CLOCK_RECITAL = re.compile(
+        r"[^.!?]*\b\d{1,2}:\d{2}\s*(?:[AaPp]\.?[Mm]\.?)?(?:\s+[A-Z]{2,4})?"
+        r"(?:\s+on\s+\w+day,?\s+\w+\s+\d{1,2},?\s+\d{4})?[^.!?]*[.!?]\s*"
+    )
+    _ASKED_ABOUT_TIME = re.compile(
+        r"\b(time|date|day|today|tonight|tomorrow|yesterday|clock|hour|minute|"
+        r"when|month|year|schedule|calendar)\b", re.I,
+    )
+
+    @classmethod
+    def _strip_unasked_clock(cls, answer: str, user_text: str) -> str:
+        if cls._ASKED_ABOUT_TIME.search(user_text or ""):
+            return answer
+        cleaned = cls._CLOCK_RECITAL.sub(" ", answer or "")
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        # Never return nothing: if the clock WAS the whole answer, keep it.
+        return cleaned if len(cleaned) >= 12 else answer
+
     _FILLER_OPENER = re.compile(
         r"^(?:I see\.|I understand\.|I know\.|Sure\.)\s+"
         # Offer preamble before delivered content: "I can make one for you.
@@ -1517,7 +1594,7 @@ remembered, researched, or did something unless the context supports it.
             score += len(self._ROBOT_WORDS.findall(clause))
         return score
 
-    async def _act_guard(self, final_text: str, regenerate) -> str:
+    async def _act_guard(self, final_text: str, regenerate, user_text: str = "") -> str:
         """She already acted; the reply must not offer to act.
 
         Today's audit: 10 turns where the answer sat in her context while she
@@ -1525,7 +1602,7 @@ remembered, researched, or did something unless the context supports it.
         the echo guard: catch capability-talk, regenerate once with a hard
         directive, and always strip filler openers.
         """
-        final_text = self._FILLER_OPENER.sub("", final_text).strip()
+        final_text = self._FILLER_OPENER.sub("", self._strip_unasked_clock(final_text, user_text)).strip()
         if not self._CAPABILITY_TALK.search(final_text) and self._robot_register_score(final_text) < 2:
             return final_text
         LOG.info("Reply offered to act instead of acting; regenerating once")
@@ -1737,6 +1814,15 @@ remembered, researched, or did something unless the context supports it.
                 "Answer as Kendra the living companion — warm, plain, first-person "
                 "feelings and opinions. NEVER mention processing, systems, sensors, "
                 "data, networks, or being a machine."
+            ),
+            user_text=user_text,
+        )
+        final_text = await self._personal_fact_guard(
+            final_text, memory, user_text,
+            budgeted_regen(
+                "You stated a fact about Jonathan that is NOT in your memories. "
+                "Use only what your memories say about him; if they do not answer "
+                "his question, say plainly that you do not know yet."
             ),
         )
         final_text = await self._movement_claim_guard(
@@ -1966,6 +2052,7 @@ remembered, researched, or did something unless the context supports it.
                     evidence_messages,
                     max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
                 ),
+                user_text=user_text,
             )
             # Verify before she speaks: every number and name must come from
             # the sources, not from memory.
@@ -2554,7 +2641,7 @@ remembered, researched, or did something unless the context supports it.
                 cleaned = capability_lead.sub("", self._FILLER_OPENER.sub("", lead_buffer.lstrip()))
                 await on_delta(cleaned or lead_buffer, "curious")
             final_text = "".join(final_text_parts).strip() or "My search came back empty."
-            final_text = capability_lead.sub("", self._FILLER_OPENER.sub("", final_text)).strip()
+            final_text = capability_lead.sub("", self._FILLER_OPENER.sub("", self._strip_unasked_clock(final_text, user_text))).strip()
             # Grounding check on the spoken path too. Streaming means the
             # first phrases are already out loud, so a correction is spoken
             # as a correction — which is honest, and far better than leaving
