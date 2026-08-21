@@ -338,11 +338,9 @@ remembered, researched, or did something unless the context supports it.
             {
                 "role": "system",
                 "content": (
-                    f"{now_line}\nRelevant local memories (these name people "
-                    f"explicitly; Jonathan is the person talking to you, so a memory "
-                    f"about Jonathan is a memory about the person saying 'I' and "
-                    f"'my' — answer him with it):\n"
-                    f"{json.dumps(items, separators=(',', ':'), ensure_ascii=False)}"
+                    f"{now_line}\nWhat you remember (Jonathan is the person talking "
+                    f"to you, so anything about Jonathan is about him):\n"
+                    + "\n".join(f"- {item['content']}" for item in items)
                 ),
             }
         ]
@@ -673,7 +671,9 @@ remembered, researched, or did something unless the context supports it.
                 "Jonathan asked for a report, so report every result; never respond with "
                 "only a question about what interests him. Speak in plain flowing "
                 "sentences — NO numbered lists, NO markdown, NO asterisks:\n"
-                + json.dumps(compact, ensure_ascii=False)
+                # Prose, not JSON: a 1.7B model parrots its context, and
+                # Jonathan heard her read braces and quotes aloud.
+                + "\n".join(f"- {c['title']}: {c['note']}" for c in compact)
             ),
         }]
 
@@ -700,7 +700,7 @@ remembered, researched, or did something unless the context supports it.
                     "holding and the description does not explicitly say he is holding something, tell "
                     "him you cannot see anything in his hands. Never invent detail that is not in the "
                     "description (no colours, brands, or engravings you were not told about):\n"
-                    + json.dumps(scene, ensure_ascii=False)
+                    + "\n".join(f"- {key}: {value}" for key, value in scene.items() if value)
                 ),
             }
         ]
@@ -749,6 +749,62 @@ remembered, researched, or did something unless the context supports it.
                 "Here's what I can see: " + scene[:180])
 
     _ABOUT_HIM = re.compile(r"\b(my|mine|me|i|i'?m|am i|do i|did i|have i)\b", re.I)
+
+    async def _question_loop_guard(self, answer: str, user_text: str, regenerate) -> str:
+        """She may not ask the same question twice.
+
+        Measured: "What part of your brain are you focusing on?" — he
+        answered it, and she asked it again verbatim next turn. A small
+        model that ends every reply with a question, and sees its own
+        questions in history, converges on asking the same one forever.
+        That is what reads as amnesia.
+        """
+        question = self._trailing_question(answer)
+        if not question:
+            return answer
+        try:
+            recent = await self.brain.recent_turns(limit=4, max_age_seconds=1800)
+        except Exception:
+            return answer
+        import difflib
+
+        for turn in recent or []:
+            previous = self._trailing_question(str(turn.get("kendra_text") or ""))
+            if not previous:
+                continue
+            if difflib.SequenceMatcher(None, question.casefold(), previous.casefold()).ratio() > 0.7:
+                LOG.warning("Repeated question suppressed: %r", question[:60])
+                try:
+                    fresh = (await regenerate(question)).strip()
+                except Exception:
+                    fresh = ""
+                if fresh and not self._repeats(fresh, recent):
+                    return fresh
+                # Failing that, keep the statement and drop the stale question.
+                trimmed = answer[: answer.rfind(question)].strip()
+                return trimmed or answer
+        return answer
+
+    @staticmethod
+    def _trailing_question(text: str) -> str | None:
+        parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", str(text or "")) if p.strip()]
+        if parts and parts[-1].endswith("?"):
+            return parts[-1]
+        return None
+
+    def _repeats(self, candidate: str, recent: list[dict[str, Any]]) -> bool:
+        import difflib
+
+        question = self._trailing_question(candidate)
+        if not question:
+            return False
+        for turn in recent or []:
+            previous = self._trailing_question(str(turn.get("kendra_text") or ""))
+            if previous and difflib.SequenceMatcher(
+                None, question.casefold(), previous.casefold()
+            ).ratio() > 0.7:
+                return True
+        return False
 
     async def _personal_fact_guard(self, answer: str, memory: dict[str, Any],
                                    user_text: str, regenerate) -> str:
@@ -1817,6 +1873,14 @@ remembered, researched, or did something unless the context supports it.
             ),
             user_text=user_text,
         )
+        final_text = await self._question_loop_guard(
+            final_text, user_text,
+            budgeted_regen(
+                "You already asked Jonathan that exact question and he answered it. "
+                "Respond to what he actually said. Do not end with a question unless "
+                "it is a genuinely new one."
+            ),
+        )
         final_text = await self._personal_fact_guard(
             final_text, memory, user_text,
             budgeted_regen(
@@ -1970,7 +2034,7 @@ remembered, researched, or did something unless the context supports it.
                 "WHAT YOUR MEMORY RETURNED — these are your own accurate memories; "
                 "trust them fully, including plans for your future body (answer "
                 "from them; only if empty say you have no memory of it):\n"
-                + json.dumps(recalled, ensure_ascii=False)
+                + "\n".join(f"- {item['note']}" for item in recalled)
             )
             final_text = (
                 await self.llm.chat(

@@ -52,14 +52,21 @@ def shape_text(text: str, style: str) -> str:
             if words:
                 words[-1] = _stretch(words[-1])
             sung.append(" ".join(words))
-        return "... ".join(sung) + "..."
+        return _tidy("... ".join(sung) + "...")
     if style == "rapping":
         # Short percussive clauses; commas force the beat.
         lines = [ln.strip(" .,") for ln in re.split(r"[\n.]+", value) if ln.strip()]
-        return ", ".join(lines) + "."
+        return _tidy(", ".join(lines) + ".")
     if style == "whisper":
         return value
     return value
+
+
+def _tidy(text: str) -> str:
+    """No doubled punctuation: ",." was being read aloud as a stumble."""
+    text = re.sub(r"\s*,\s*\.", ".", text)
+    text = re.sub(r"([.,])\1+", r"\1", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def _stretch(word: str) -> str:

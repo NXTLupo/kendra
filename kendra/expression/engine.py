@@ -163,7 +163,10 @@ class ExpressionEngine:
             return None
         melody = "lullaby" if plan.motion_intensity < 0.35 else "simple"
         await asyncio.to_thread(play, apply_melody(rendered, melody))
-        return " / ".join(lines)
+        # Joined with a slash this went into her transcript AND her history,
+        # and she then read the punctuation out: "why do you keep saying
+        # slash?". Transcripts must contain only speakable text.
+        return " ".join(line.rstrip(".") + "." for line in lines)
 
     def stop(self) -> None:
         """Interruptibility is mandatory: cancel mid-performance."""

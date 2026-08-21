@@ -19,15 +19,15 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("music", re.compile(r"\bplay\s+(?:me\s+|us\s+)?(?:some\s+|a\s+|the\s+)?"
                          r"(?:music|tune|song|something|melody)\b"
                          r"|\bplay your synth\w*\b|\bmake some music\b", re.I)),
-    ("sing", re.compile(r"\b(?:sing|serenade)\b(?!\s*(?:er|ing\s+bowl))", re.I)),
+    ("sing", re.compile(r"\b(?:sing|sings|singing|serenade)\b", re.I)),
     ("hum", re.compile(r"\bhum(?:ming)?\b(?!an)", re.I)),
-    ("rap", re.compile(r"\brap\b(?!id|port|t)|\bfreestyle\b|\bspit (?:a |some )?(?:bars|rhymes)\b", re.I)),
+    ("rap", re.compile(r"\brap(?:ping)?\b(?!id|port|t)|\bfreestyle\b|\bspit (?:a |some )?(?:bars|rhymes)\b", re.I)),
     ("poem", re.compile(r"\b(?:poem|poetry|haiku|verse|limerick|sonnet|rhyme)\b", re.I)),
     ("riddle", re.compile(r"\briddle\b|\bbrain ?teaser\b", re.I)),
     ("joke", re.compile(r"\b(?:joke|something funny|make me laugh|pun)\b", re.I)),
     ("story", re.compile(r"\b(?:story|tale|tell me about a time)\b", re.I)),
     ("laugh", re.compile(r"\blaugh\b", re.I)),
-    ("dance", re.compile(r"\bdance|boogie|groove\b", re.I)),
+    ("dance", re.compile(r"\bdanc(?:e|ing)\b|\bboogie\b|\bgroove\b", re.I)),
     ("whisper", re.compile(r"\bwhisper\b", re.I)),
     ("bow", re.compile(r"\btake a bow\b|\bbow\b", re.I)),
     ("stretch", re.compile(r"\bstretch\b", re.I)),
@@ -38,7 +38,8 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 _ADDRESSED = re.compile(
     r"\b(?:can|could|will|would|please|let'?s|i want you to|i'?d like you to|"
     r"how about|why don'?t you|do a|do some|give me|make up|write|recite|"
-    r"perform|try)\b|^\s*(?:hey\s+)?kendra\b|^\s*\w+\s+(?:me|us)\b|"
+    r"perform|try|demonstrate|show me|show us|lets hear|let'?s hear|"
+    r"how'?s your|what'?s your)\b|^\s*(?:hey\s+)?kendra\b|^\s*\w+\s+(?:me|us)\b|"
     r"^\s*(?:sing|hum|rap|dance|laugh|whisper|bow|stretch|play|recite|tell)\b",
     re.I,
 )
@@ -75,5 +76,14 @@ def detect_expression(text: str) -> tuple[str, str | None] | None:
                     rest = rest.strip(" .,!?")
                     if len(rest) > 3:
                         subject = rest
+            if subject:
+                # "your singing ability" and "me a song" are not topics; a
+                # junk subject made her sing ABOUT the word "ability".
+                cleaned = re.sub(
+                    r"\b(?:ability|abilities|skills?|voice|talent|thing|something|"
+                    r"anything|song|tune|music|poem|rap|for (?:me|us)|please)\b",
+                    " ", subject, flags=re.I,
+                ).strip(" .,!?-")
+                subject = cleaned if len(cleaned) > 2 else None
             return behavior, subject
     return None

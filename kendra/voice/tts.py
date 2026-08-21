@@ -38,6 +38,12 @@ def speakable(text: str) -> str:
             continue
         cleaned.append(character)
     value = _MARKDOWN.sub(" ", "".join(cleaned))
+    # Context leakage insurance: if a fragment of her own prompt reaches the
+    # speaker, do not read punctuation aloud. She once asked-and-answered
+    # in JSON and read "/" as "slash".
+    value = re.sub(r'[{}\[\]"`]+', " ", value)
+    value = re.sub(r"\s+/\s+", ". ", value)
+    value = re.sub(r"\b(?:content|provenance|when|title|note|kind)\s*:\s*", "", value, flags=re.I)
     return _WHITESPACE.sub(" ", value).strip()
 
 
