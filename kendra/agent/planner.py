@@ -35,6 +35,12 @@ class AgentRuntime:
         # patient client so a real walk is never cut off as a timeout.
         self.body_motion = UnixJsonClient(settings.socket_path("body"), timeout=90)
         self.vision = VisionClient(settings)
+        # Long-horizon requests ("research X and then compare it to Y") run
+        # as planned steps rather than one impossible answer. Native, not
+        # DeerFlow: see docs/DEERFLOW_ASSESSMENT.md for why.
+        from .orchestrator import TaskOrchestrator
+
+        self.orchestrator = TaskOrchestrator(self)
         self.max_tool_steps = int(settings.get("agent.max_tool_steps", 8))
         self.max_movement_calls = int(settings.get("agent.max_movement_calls", 3))
         self.mission_timeout = float(settings.get("agent.mission_timeout_seconds", 180))
@@ -2053,6 +2059,18 @@ remembered, researched, or did something unless the context supports it.
                     source=source,
                     autonomous=autonomous,
                 )
+        if self.orchestrator.wants_orchestration(user_text):
+            # Several stages, worked one at a time on the tool slot so a
+            # long job never competes with a spoken turn.
+            timings = getattr(self, "_turn_timings", None)
+            if timings is not None:
+                timings["kind"] = "task"
+            run = await self.orchestrator.run(user_text)
+            if run.answer:
+                return await self._remember_plain_turn(
+                    session_id, user_text, run.answer, source=source, autonomous=autonomous
+                )
+
         if allowed_tools == {"recall"}:
             # Parity with the voice stream path: memory questions answer on
             # the warm conversation slot. Without this, turn() fell through
