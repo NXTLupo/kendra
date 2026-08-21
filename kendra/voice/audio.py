@@ -158,7 +158,15 @@ class LocalAudioCapture:
                             except Exception:
                                 break
                         floor = min(floors)
-                        threshold = float(np.clip(floor * 3.0, 120.0, 550.0))
+                        # The 550 ceiling exists so one noisy sample cannot
+                        # deafen her for the session. But in a genuinely loud
+                        # room (music on: ambient measured 2852) a fixed
+                        # ceiling sits BELOW the noise floor and she hears
+                        # speech in everything. The quietest-of-three sample
+                        # above already rejects brief spikes, so let a room
+                        # that is really this loud raise its own ceiling.
+                        ceiling = max(550.0, floor * 1.2)
+                        threshold = float(np.clip(floor * 3.0, 120.0, ceiling))
                         LOG.info(
                             "VAD threshold calibrated to %.0f (configured %.0f, quietest ambient %.0f of %s)",
                             threshold, self.vad.threshold_rms, floor,
@@ -180,7 +188,16 @@ class LocalAudioCapture:
         last: Exception | None = None
         for attempt in range(3):
             try:
-                return sd.RawInputStream(**kwargs)
+                stream = sd.RawInputStream(**kwargs)
+                # CONSTRUCTION IS NOT THE FAILURE POINT. PortAudio builds the
+                # object happily and then throws -9986 when the stream is
+                # STARTED inside the caller's `with`, so this handler never
+                # saw 150 consecutive failures and the self-restart never
+                # fired. Start it here to find out now, then hand back a
+                # stopped stream for `with` to start cleanly.
+                stream.start()
+                stream.stop()
+                return stream
             except Exception as exc:  # PortAudioError and friends
                 last = exc
                 LOG.warning("Microphone stream open failed (attempt %d): %s", attempt + 1, exc)
@@ -205,7 +222,7 @@ class LocalAudioCapture:
         # Only a fresh process fixes it, and nothing supervises this one, so
         # she restarts herself.
         self._stream_failures = getattr(self, "_stream_failures", 0) + 1
-        if self._stream_failures >= 3:
+        if self._stream_failures >= 2:
             self._self_restart()
         raise RuntimeError(f"microphone unavailable after retries: {last}")
 
