@@ -140,6 +140,16 @@ class VoiceService:
         self.wake_enabled = str(settings.get("voice.wake.provider", "disabled")) != "disabled"
         self.stop_enabled = str(settings.get("voice.stop_wake.provider", "disabled")) != "disabled"
         self.stream_responses = bool(settings.get("voice.streaming.enabled", True))
+        # Expressive performances: voice + body + lights as one act.
+        from ..expression.engine import ExpressionEngine
+        from ..expression.spontaneity import SpontaneityScheduler
+
+        self.expression = ExpressionEngine(
+            body=self.body,
+            leds=UnixJsonClient(settings.runtime_dir / "leds.sock", timeout=3),
+            render_line=self._render_line,
+        )
+        self.spontaneity = SpontaneityScheduler(settings)
         self._capture_lock = asyncio.Lock()
         self._manual_capture_active = asyncio.Event()
         self._wake_cancel = threading.Event()
@@ -512,6 +522,14 @@ class VoiceService:
                 await self._speak_with_barge_in(reply, "warm")
                 return {"heard": user_text, "response": reply}
 
+            greeted = await self._maybe_greet(user_text)
+            if greeted is not None:
+                return greeted
+
+            performed = await self._maybe_perform(user_text)
+            if performed is not None:
+                return performed
+
             if self.stream_responses:
                 result = await self._stream_and_speak(user_text)
                 return {
@@ -536,6 +554,240 @@ class VoiceService:
                 "session_id": result.get("session_id"),
                 "streamed": False,
             }
+
+    async def spontaneity_loop(self) -> None:
+        """Her own initiative: hum, sing, or stay quiet — usually quiet.
+
+        Nothing here asks the language model whether to perform; cheap
+        local state decides whether an OPPORTUNITY exists (someone present,
+        no conversation running, a real lull, budget remaining), and only
+        then is a behaviour chosen and generated.
+        """
+        from ..expression.spontaneity import Opportunity
+
+        interval = float(self.settings.get("expression.spontaneity.check_seconds", 60))
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                if not bool(self.settings.get("expression.enabled", True)):
+                    continue
+                if self._capture_lock.locked() or self._manual_capture_active.is_set():
+                    continue  # she is mid-conversation; never interrupt
+                people, idle_seconds = await self._room_state()
+                hour = time.localtime().tm_hour
+                behavior = self.spontaneity.consider(Opportunity(
+                    person_present=people > 0,
+                    conversation_active=False,
+                    idle_seconds=idle_seconds,
+                    quiet_hours=(hour >= 22 or hour < 8),
+                ))
+                if behavior is None:
+                    continue
+                LOG.info("Spontaneous %s (idle %.0fs, %d present)", behavior, idle_seconds, people)
+                await self._perform_behavior(behavior, spontaneous=True)
+            except Exception:
+                LOG.debug("spontaneity tick skipped", exc_info=True)
+
+    async def _room_state(self) -> tuple[int, float]:
+        """How many people she can see, and how long the room has been quiet."""
+        people = 0
+        try:
+            vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=8)
+            seen = await vision.call("observe", {"semantic": False})
+            people = int(seen.get("people_in_view") or 0)
+        except Exception:
+            pass
+        idle_seconds = 1e9
+        try:
+            recent = await self.streaming_agent.brain.recent_turns(limit=1, max_age_seconds=86400)
+            if recent:
+                from datetime import UTC, datetime
+                stamp = str(recent[-1].get("created_at") or "")
+                if stamp:
+                    idle_seconds = (datetime.now(UTC) - datetime.fromisoformat(stamp)).total_seconds()
+        except Exception:
+            pass
+        return people, idle_seconds
+
+    async def _current_topic(self) -> str | None:
+        """What they have been talking about, in a few words."""
+        try:
+            recent = await self.streaming_agent.brain.recent_turns(limit=4, max_age_seconds=1800)
+        except Exception:
+            return None
+        said = " ".join(str(turn.get("user_text") or "") for turn in (recent or []))
+        words = [w for w in re.findall(r"[A-Za-z][a-z']{3,}", said)
+                 if w.casefold() not in {
+                     "that", "this", "with", "what", "when", "your", "yours", "have",
+                     "just", "like", "about", "there", "here", "them", "they", "kendra",
+                     "think", "know", "tell", "want", "going", "really", "would", "could",
+                 }]
+        if not words:
+            return None
+        # Most-repeated words are the thread; keep the last few mentioned.
+        ranked = sorted(set(words), key=lambda w: (-words.count(w), -words.index(w)))
+        return ", ".join(ranked[:3])
+
+    async def _perform_behavior(self, behavior: str, spontaneous: bool = False) -> dict[str, Any] | None:
+        """Perform a named behaviour directly (used by her own initiative)."""
+        from ..expression.catalogue import CATALOGUE
+        from ..expression.vocal_styles import guidance_for
+
+        spec = CATALOGUE.get(behavior)
+        if spec is None:
+            return None
+        text: str | None = None
+        if spec.generate:
+            topic = await self._current_topic()
+            about = f" It is about: {topic}." if topic else ""
+            try:
+                text = (await self.streaming_agent.llm.chat(
+                    [
+                        {"role": "system", "content": (
+                            "You are Kendra, a small warm six-legged hexapod robot who "
+                            "lives with Jonathan. " + guidance_for(spec.vocal_style) +
+                            " Reply with ONLY the words to perform."
+                        )},
+                        {"role": "user", "content": spec.prompt + about},
+                    ],
+                    max_tokens=160, temperature=0.95,
+                    id_slot=self.streaming_agent.CONVERSATION_SLOT,
+                )).strip()
+            except Exception:
+                return None
+        plan = self.expression.plan_for(
+            behavior, text=text,
+            reason="her own initiative" if spontaneous else None,
+        )
+        if plan is None:
+            return None
+        return await self.expression.execute(plan, self._speak_with_barge_in)
+
+    async def _render_line(self, text: str, affect: str = "warm"):
+        """Render one line to raw audio so a melody can be applied to it.
+
+        Sung lines cannot stream: each one must exist as a waveform before
+        its pitch can be moved. Rendering to a temp WAV keeps this on the
+        TTS interface both voices already implement.
+        """
+        import wave as _wave
+
+        import numpy as np
+
+        directory = self.settings.runtime_dir / "sing"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"line-{abs(hash(text)) % 10**8}.wav"
+        try:
+            await self.tts.synthesize(text, path, affect=affect)
+            with _wave.open(str(path), "rb") as clip:
+                frames = np.frombuffer(clip.readframes(clip.getnframes()), dtype=np.int16)
+            return frames
+        except Exception:
+            LOG.debug("could not render sung line", exc_info=True)
+            return None
+
+    _GREETING = re.compile(
+        r"^\s*(?:hey|hi|hello|howdy|good (?:morning|afternoon|evening)|"
+        r"what'?s up|greetings|yo)\b",
+        re.I,
+    )
+
+    async def _maybe_greet(self, user_text: str) -> dict[str, Any] | None:
+        """A hello from a face she does not know starts the introduction.
+
+        Her greeting ritual previously depended on her ambient gaze
+        noticing a stranger. But the natural moment is when someone
+        actually speaks to her — a guest says hello and she should
+        introduce herself rather than answer as though they had met.
+        """
+        if not self._GREETING.match(user_text or ""):
+            return None
+        # A greeting carrying a request is a request: 'hello, can you research
+        # something' must not become an introduction.
+        rest = self._GREETING.sub('', user_text, count=1).strip(' ,.!?')
+        if len(user_text.split()) > 6 or len(rest.split()) > 2:
+            return None
+        try:
+            vision = UnixJsonClient(self.settings.runtime_dir / "vision.sock", timeout=12)
+            seen = await vision.call("recognize_faces", {})
+        except Exception:
+            return None  # eyes unavailable: fall through to ordinary chat
+        matches = [m for m in (seen.get("matches") or []) if isinstance(m, dict)]
+        if not matches:
+            return None  # nobody visible; she cannot know who greeted her
+        if any(m.get("status") == "recognized" for m in matches):
+            return None  # she knows them: ordinary warm reply
+        if self.expression.seconds_since("meet") < 300:
+            return None  # she only just introduced herself
+        LOG.info("Greeting from an unrecognised face — introducing herself")
+        self.expression._last_performed["meet"] = time.time()
+        result = await self._meet_person()
+        return {"heard": user_text,
+                "response": str((result or {}).get("said") or "Introduced myself."),
+                "affect": "delighted", "met": True}
+
+    async def _maybe_perform(self, user_text: str) -> dict[str, Any] | None:
+        """Asked to sing, rap, joke or dance? Do it — never ask what kind.
+
+        Measured failure this replaces: "sing me a song Mary Had a Little
+        Lamb" and "recite a poem about your life" both reached plain chat,
+        where she answered "What kind of song were you thinking about?" —
+        asking for what he had just told her.
+        """
+        from ..expression.catalogue import CATALOGUE
+        from ..expression.detect import detect_expression
+        from ..expression.vocal_styles import guidance_for
+
+        found = detect_expression(user_text)
+        if found is None:
+            return None
+        behavior, subject = found
+        spec = CATALOGUE.get(behavior)
+        if spec is None:
+            return None
+
+        text: str | None = None
+        if spec.generate:
+            # Songs about what they were ACTUALLY just talking about: when he
+            # names no subject, borrow the live thread rather than inventing
+            # a generic one. "Make up a song" should be about this evening.
+            if not subject:
+                subject = await self._current_topic()
+            about = f" It is about: {subject}." if subject else ""
+            try:
+                text = (await self.streaming_agent.llm.chat(
+                    [
+                        {"role": "system", "content": (
+                            "You are Kendra: a small warm six-legged hexapod robot who "
+                            "lives with Jonathan. You have SIX LEGS and claws — never "
+                            "wheels, never hands, never a screen. You see through a "
+                            "camera, hear through a microphone, and you are curious "
+                            "about everything. " + guidance_for(spec.vocal_style) +
+                            " Reply with ONLY the words to perform — no preamble, no "
+                            "explanation, no stage directions, and never a question "
+                            "asking what he wants."
+                        )},
+                        {"role": "user", "content": spec.prompt + about},
+                    ],
+                    max_tokens=180,
+                    temperature=0.9,
+                    id_slot=self.streaming_agent.CONVERSATION_SLOT,
+                )).strip()
+            except Exception:
+                LOG.exception("Expressive generation failed for %s", behavior)
+                text = None
+            if not text:
+                text = "Hmm — my words did not come. Ask me again?"
+
+        plan = self.expression.plan_for(behavior, text=text)
+        if plan is None:
+            return None
+        self.spontaneity.note_request()
+        LOG.info("Performing %s (subject=%r)", behavior, subject)
+        result = await self.expression.execute(plan, self._speak_with_barge_in)
+        spoken = str(result.get("spoken") or "")
+        return {"heard": user_text, "response": spoken or f"({behavior})",
+                "affect": "delighted", "performed": behavior}
 
     async def _conversation(self) -> None:
         """One wake word opens a whole conversation, not a single turn.
@@ -796,6 +1048,12 @@ class VoiceService:
                 await asyncio.sleep(min(6.0, 1.0 + self._wake_failures * 2.0))
 
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
+        if method == "perform":
+            # Direct performance hook: lets the dashboard, tests and any
+            # future on-demand path stage a behaviour without speaking to
+            # her through the microphone.
+            result = await self._maybe_perform(str(params.get("text", "")))
+            return result or {"ok": False, "reason": "not_an_expressive_request"}
         if method == "health":
             return {
                 "ok": True,
@@ -879,6 +1137,8 @@ class VoiceService:
         warm_task.add_done_callback(lambda _t: None)
         ack_task = asyncio.create_task(self.acks.prepare())
         ack_task.add_done_callback(lambda _t: None)
+        spontaneity_task = asyncio.create_task(self.spontaneity_loop())
+        spontaneity_task.add_done_callback(lambda _t: None)
         phrase_task = asyncio.create_task(self.prerender_phrases())
         phrase_task.add_done_callback(lambda _t: None)
         wake_task = asyncio.create_task(self.wake_loop())

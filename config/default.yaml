@@ -422,3 +422,32 @@ logging:
 identity:
   socket: identity.sock
   match_threshold: 0.5
+
+expression:
+  # Playful, artistic and nonverbal behaviour. Every performance couples
+  # voice with hexapod motion and lights through the ordinary Body
+  # abstraction — the reflex layer and hardware gates still police it all.
+  enabled: true
+  spontaneity:
+    enabled: true
+    # Silence stays her most common idle behaviour: these gates are
+    # deliberately strict and every one of them defaults to staying quiet.
+    # Mostly on command, occasionally on her own. Measured at the previous
+    # settings she performed 19 times across 8 idle hours, which is a party
+    # trick rather than a personality; these give a handful a day, rare
+    # enough to stay surprising.
+    max_unprompted_per_hour: 1
+    minimum_interval_seconds: 2400
+    minimum_idle_seconds: 300
+    probability_per_opportunity: 0.05
+    quiet_hours:
+      start: "22:00"
+      end: "08:00"
+  personality:
+    # Mood-like weights: they bias WHAT she performs, never whether she is
+    # allowed to move. Jonathan can shift these in conversation.
+    playfulness: 0.55
+    spontaneity: 0.35
+    theatricality: 0.40
+    humor: 0.60
+    physical_expressiveness: 0.65
