@@ -60,7 +60,7 @@ the infrastructure:
   (research / recall / look / think)
 - runs them **one at a time on the planner slot**, never in parallel with a
   spoken turn (the half-duplex law that this CPU forced on us)
--- each step is timed and bounded; failures are reported as failures
+- each step is timed and bounded; failures are reported as failures
 - synthesis may use **only** what the steps actually returned
 - cancellable between steps, so "stop" still works
 - triggers only on genuinely multi-part requests, verified against
