@@ -1794,6 +1794,61 @@ remembered, researched, or did something unless the context supports it.
             "research_memory_consolidation": [],
         }
 
+    # "Okay", "yeah", "it sure does" — an acknowledgment, not a question.
+    _ACK_ONLY = re.compile(
+        r"^\s*(?:yeah|yes|yep|yup|no|nope|okay|ok|sure|right|exactly|true|"
+        r"cool|nice|wow|huh|hm+|oh|i see|got it|makes sense|fair enough|"
+        r"that'?s (?:right|true|good|fair)|it sure does|i think so|"
+        r"thanks|thank you|please|alright)\W*$",
+        re.I,
+    )
+
+    async def _quick_ack_reply(self, user_text: str, session_id: str) -> str | None:
+        """A three-word acknowledgment must not cost a full-context turn.
+
+        Measured: "It sure does." took 57.9 s and came back parroting him,
+        because a bare acknowledgment still assembled charter + exemplars +
+        history + memories and paid the whole prefill. Cost should scale
+        with the request, so these answer from a tiny prompt: the last
+        exchange, a short instruction, and a 40-token ceiling.
+        """
+        if not self._ACK_ONLY.match(user_text or ""):
+            return None
+        try:
+            recent = await self.brain.recent_turns(limit=1, max_age_seconds=900)
+        except Exception:
+            recent = []
+        last = recent[-1] if recent else {}
+        # Quoting her own previous reply here is what produced the echo:
+        # asked "Okay.", she read back a whole amnesia definition from her
+        # last turn. Give the TOPIC, never her words.
+        context = ""
+        if last:
+            topic_words = [
+                w for w in re.findall(r"[A-Za-z][a-z']{3,}",
+                                      str(last.get("kendra_text") or ""))
+                if w.casefold() not in {"that", "this", "with", "what", "your",
+                                        "have", "just", "like", "about", "there",
+                                        "they", "kendra", "think", "know"}
+            ][:6]
+            if topic_words:
+                context = f"You were talking about: {', '.join(topic_words)}.\n"
+        reply = (await self.llm.chat(
+            [
+                {"role": "system", "content": (
+                    "You are Kendra, a warm six-legged robot companion talking with "
+                    "Jonathan. He just gave a short acknowledgement, so reply in ONE "
+                    "short sentence that moves the thought forward. Do not repeat his "
+                    "words back, do not ask a question, do not start a new topic."
+                )},
+                {"role": "user", "content": context + f"He said: {user_text}"},
+            ],
+            max_tokens=40,
+            temperature=0.7,
+            id_slot=self.CONVERSATION_SLOT,
+        )).strip()
+        return reply or None
+
     async def _conversation_note(self, user_text: str) -> list[dict[str, Any]]:
         """Keep her from interviewing him.
 
@@ -1805,7 +1860,7 @@ remembered, researched, or did something unless the context supports it.
         heavy" in context and still asked what kind of metal he was into.
         """
         try:
-            recent = await self.brain.recent_turns(limit=2, max_age_seconds=1800)
+            recent = await self.brain.recent_turns(limit=4, max_age_seconds=1800)
         except Exception:
             recent = []
         notes: list[str] = []
@@ -1825,6 +1880,28 @@ remembered, researched, or did something unless the context supports it.
             "If your memories already answer something, say it instead of asking "
             "him to tell you again."
         )
+        # She told him "I am building you a mind" — exactly backwards, and
+        # the kind of role swap a small model makes when both parties are
+        # discussed in one sentence.
+        notes.append(
+            "Keep the roles straight: Jonathan is the human who is building YOU. "
+            "You are the robot being built. Never say you are building him."
+        )
+        # She recycled whole clauses from earlier answers — "it's like
+        # choosing between a carefully crafted meal and a quick bite"
+        # reappeared turns later, and an amnesia definition resurfaced as a
+        # reply to "Okay." The transcript in her context is there so she
+        # knows what was SAID, not as a phrase bank.
+        if recent:
+            previous = " ".join(
+                str(turn.get("kendra_text") or "") for turn in recent
+            )[:400]
+            if previous.strip():
+                notes.append(
+                    "You already said the following earlier in this conversation. "
+                    "Do NOT reuse these sentences, phrases or comparisons — say "
+                    f"something new: \"{previous}\""
+                )
         return [{"role": "system", "content": " ".join(notes)}]
 
     async def _plain_turn(
@@ -2527,12 +2604,25 @@ remembered, researched, or did something unless the context supports it.
                 include_self_model=False,
                 exclude_kinds=["episode"],
             )
+            quick = await self._quick_ack_reply(user_text, session_id)
+            if quick:
+                await on_delta(quick, "warm")
+                return await self._remember_plain_turn(
+                    session_id, user_text, quick, source=source, streamed=True
+                )
             messages = [
                 {"role": "system", "content": self._conversation_prompt()},
                 *self._style_exemplars(),
                 *await self._history_messages(user_text),
                 *self._memory_message(memory),
                 *build_note,
+                *self._sky_note(user_text),
+                *self._content_note(bool(self._CONTENT_TASK.search(user_text))),
+                # The voice path is the one that actually runs in a live
+                # conversation; the anti-interview note was previously only
+                # on the non-streaming path, so the question tic survived
+                # every fix. Verify guards on THIS path.
+                *await self._conversation_note(user_text),
                 {"role": "user", "content": user_text},
             ]
             final_text_parts: list[str] = []
