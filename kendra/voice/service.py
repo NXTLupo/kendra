@@ -122,6 +122,16 @@ def _is_noise_caption(text: str) -> bool:
     return bool(stripped) and stripped[0] in "([" and stripped[-1] in ")]"
 
 
+# A song, poem or joke is never about her limitations. Scoped to
+# performances only — in conversation, admitting she cannot see is honest.
+_PERFORMANCE_DENIAL = re.compile(
+    r"\bI (?:can'?t|cannot|am unable to|don'?t have)\b"
+    r"|\bI(?:'m| am) (?:not able|unable)\b"
+    r"|\bas an? (?:AI|assistant|language model)\b",
+    re.I,
+)
+
+
 # Last-resort content: a performance should never degrade into an apology.
 FALLBACK_LINES = {
     "sing": "La la la, six little legs and a song for you. La la la, I will hum it all day through.",
@@ -675,6 +685,7 @@ class VoiceService:
         )
         if plan is None:
             return None
+        self.thinking_sounds.stop()
         self._speaking_until = time.time() + plan.duration_limit_s + 1.0
         result = await self.expression.execute(plan, self._speak_with_barge_in)
         self._speaking_until = time.time() + 0.4
@@ -805,6 +816,13 @@ class VoiceService:
             # the heart and something related to it" is fifteen words of
             # meta that no length heuristic catches.
             def is_real_content(candidate: str) -> bool:
+                # Lyrics came back as "I can't process images or audio right
+                # now" — a capability denial, sung. This check is scoped to
+                # PERFORMANCES on purpose: "I can't see right now" is an
+                # honest and necessary answer in conversation, and must not
+                # be banned there.
+                if _PERFORMANCE_DENIAL.search(candidate):
+                    return False
                 return not re.search(
                     r"\b(?:make|write|create|compose|come up with|think of|"
                     r"put together)\s+(?:you\s+)?(?:a|an|some)?\s*"
@@ -844,6 +862,12 @@ class VoiceService:
             return None
         self.spontaneity.note_request()
         LOG.info("Performing %s (subject=%r)", behavior, subject)
+        # sounddevice has ONE output stream: every thinking blip calls
+        # sd.play and therefore STOPS whatever is already sounding. With the
+        # tones still looping, each one chopped a note out of her song —
+        # "she cut off her singing again". Speech silences them on its way
+        # in; audio-only performances never did.
+        self.thinking_sounds.stop()
         # A performance makes SOUND, and audio-only ones (singing, humming,
         # the synth) play straight through sounddevice rather than through
         # _speak_with_barge_in — so nothing was blocking her microphone or
