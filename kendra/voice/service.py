@@ -623,7 +623,7 @@ class VoiceService:
             pass
         return people, idle_seconds
 
-    async def _current_topic(self) -> str | None:
+    async def _current_topic(self, his_words_only: bool = False) -> str | None:
         """What they have been talking about, in a few words."""
         try:
             recent = await self.streaming_agent.brain.recent_turns(limit=4, max_age_seconds=1800)
@@ -675,7 +675,10 @@ class VoiceService:
         )
         if plan is None:
             return None
-        return await self.expression.execute(plan, self._speak_with_barge_in)
+        self._speaking_until = time.time() + plan.duration_limit_s + 1.0
+        result = await self.expression.execute(plan, self._speak_with_barge_in)
+        self._speaking_until = time.time() + 0.4
+        return result
 
     async def _render_line(self, text: str, affect: str = "warm"):
         """Render one line to raw audio so a melody can be applied to it.
@@ -766,7 +769,9 @@ class VoiceService:
             # names no subject, borrow the live thread rather than inventing
             # a generic one. "Make up a song" should be about this evening.
             if not subject:
-                subject = await self._current_topic()
+                # From HIS words only: seeded from her own lyrics she sang
+                # about "heart, It's, you're" — her previous song — forever.
+                subject = await self._current_topic(his_words_only=True)
             about = f" It is about: {subject}." if subject else ""
             try:
                 text = (await self.streaming_agent.llm.chat(
@@ -795,7 +800,23 @@ class VoiceService:
             # guitar-related lyrics for you. Let me try something." — and
             # then sang THAT. Reuse the general guard rather than adding
             # another special case.
-            if text and self.streaming_agent._looks_undelivered(text, user_text):
+            # A performance's product test: the text must BE the piece, not
+            # a description of the piece. "I'm going to make a song about
+            # the heart and something related to it" is fifteen words of
+            # meta that no length heuristic catches.
+            def is_real_content(candidate: str) -> bool:
+                return not re.search(
+                    r"\b(?:make|write|create|compose|come up with|think of|"
+                    r"put together)\s+(?:you\s+)?(?:a|an|some)?\s*"
+                    r"(?:song|poem|rap|joke|riddle|story|lyrics|tune|verse)\b"
+                    r"|\blyrics for\b|\bsomething related to\b"
+                    r"|\bhere(?:'s| is| are)\b.{0,20}\b(?:song|poem|joke)\b",
+                    candidate, re.I,
+                )
+
+            if text and self.streaming_agent._looks_undelivered(
+                text, user_text, has_product=is_real_content
+            ):
                 LOG.warning("Performance text was meta, not content: %r", text[:70])
                 try:
                     text = (await self.streaming_agent.llm.chat(
@@ -813,7 +834,9 @@ class VoiceService:
                     )).strip()
                 except Exception:
                     LOG.debug("performance retry failed", exc_info=True)
-            if not text or self.streaming_agent._looks_undelivered(text, user_text):
+            if not text or self.streaming_agent._looks_undelivered(
+                text, user_text, has_product=is_real_content
+            ):
                 text = FALLBACK_LINES.get(behavior) or "La la la, six little legs on the floor."
 
         plan = self.expression.plan_for(behavior, text=text)
@@ -821,7 +844,20 @@ class VoiceService:
             return None
         self.spontaneity.note_request()
         LOG.info("Performing %s (subject=%r)", behavior, subject)
+        # A performance makes SOUND, and audio-only ones (singing, humming,
+        # the synth) play straight through sounddevice rather than through
+        # _speak_with_barge_in — so nothing was blocking her microphone or
+        # recording what she had just made. She heard her own song, the
+        # topic extractor pulled words out of her own lyrics, and she sang
+        # again: three times in a row while Jonathan was ignored.
+        self._speaking_until = time.time() + plan.duration_limit_s + 1.0
         result = await self.expression.execute(plan, self._speak_with_barge_in)
+        self._speaking_until = time.time() + 0.4
+        ledger = getattr(self, "_spoken_ledger", None)
+        if ledger is None:
+            ledger = self._spoken_ledger = []
+        ledger.append((time.time(), str(result.get("spoken") or plan.text or "")))
+        del ledger[:-8]
         spoken = str(result.get("spoken") or "")
         return {"heard": user_text, "response": spoken or f"({behavior})",
                 "affect": "delighted", "performed": behavior}
