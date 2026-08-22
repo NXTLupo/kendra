@@ -96,7 +96,11 @@ llm:
   # temperature 0.7, top_p 0.8, top_k 20, min_p 0. Repetition is mitigated
   # with presence_penalty alone (card range 0-2); frequency_penalty and heavy
   # repeat_penalty are off-spec and measurably degraded coherence.
-  temperature: 0.7
+  # 0.7 is Qwen3's card default, but on a 1.7B in open conversation it
+  # wanders: she drifted off topic and mixed threads together. 0.55 keeps
+  # her coherent while leaving room for personality; her expressive
+  # performances still generate at their own higher temperature.
+  temperature: 0.55
   top_p: 0.8
   top_k: 20
   min_p: 0.0

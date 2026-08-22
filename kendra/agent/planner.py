@@ -1597,7 +1597,13 @@ remembered, researched, or did something unless the context supports it.
         r"\b(?:"
         r"(?:can|do|what do|what can) you see"
         r"|se{1,3}\s+(?:me|this|that|it|us|him|her|the|my|anything|who)"
-        r"|look(?:ing)?\s+(?:at|around|here|over|closely|carefully)"
+        # "look at" only counts when the object is HERE. Rhetorical uses —
+        # "just look at Miles Davis", "look at how fast it goes" — opened her
+        # camera and she described Jonathan holding a guitar as if he were
+        # the person under discussion.
+        r"|look(?:ing)?\s+(?:around|here|over there|closely|carefully)\b"
+        r"|look(?:ing)?\s+at\s+(?:this|that|these|those|me\b|my\b|us\b|it\b|"
+        r"the\s+(?:room|screen|camera|table|floor|wall))"
         r"|watch(?:ing)?\s+(?:me|this|us)"
         r"|(?:your|those) eyes"
         r"|what(?:'s| is) (?:in front of|around|behind) (?:you|me|us)"
@@ -2107,7 +2113,7 @@ remembered, researched, or did something unless the context supports it.
             limit=int(self.settings.get("brain.live_retrieval_limit", 3)),
             character_budget=int(self.settings.get("brain.live_context_character_budget", 1400)),
             include_self_model=False,
-            exclude_kinds=["episode"],
+            exclude_kinds=["episode", "observation"],
         )
         thinking = self._wants_thinking(user_text)
         final_text = (
@@ -2281,7 +2287,7 @@ remembered, researched, or did something unless the context supports it.
         capabilities, observation = await self._body_context()
         _stage1 = time.monotonic()
         memory = await self.brain.context(
-            self._memory_query(user_text, observation), exclude_kinds=["episode"]
+            self._memory_query(user_text, observation), exclude_kinds=["episode", "observation"]
         )
         _timings = getattr(self, "_turn_timings", None)
         if _timings is not None:
@@ -2347,7 +2353,7 @@ remembered, researched, or did something unless the context supports it.
                     limit=6,
                     character_budget=1400,
                     include_self_model=False,
-                    exclude_kinds=["episode"],
+                    exclude_kinds=["episode", "observation"],
                 )
                 hits = list(ctx.get("memories", []))
             except Exception:
@@ -2785,7 +2791,7 @@ remembered, researched, or did something unless the context supports it.
                 limit=int(self.settings.get("brain.live_retrieval_limit", 3)),
                 character_budget=int(self.settings.get("brain.live_context_character_budget", 1400)),
                 include_self_model=False,
-                exclude_kinds=["episode"],
+                exclude_kinds=["episode", "observation"],
             )
             turn_notes = await self._conversation_note(user_text)
             quick = await self._quick_ack_reply(user_text, session_id)
@@ -2981,7 +2987,7 @@ remembered, researched, or did something unless the context supports it.
                     limit=6,
                     character_budget=1400,
                     include_self_model=False,
-                    exclude_kinds=["episode"],
+                    exclude_kinds=["episode", "observation"],
                 )
                 hits = list(ctx.get("memories", []))
             except Exception:

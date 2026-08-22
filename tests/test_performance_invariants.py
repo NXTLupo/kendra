@@ -58,6 +58,21 @@ class TestExpressiveRouting:
             assert spec.gesture in ROUTINES, f"{name} has no body movement"
 
 
+class TestSightRouting:
+    """Her camera must open for real requests, never for rhetoric."""
+
+    def test_rhetorical_look_does_not_open_her_eyes(self):
+        for phrase in ("Just look at Miles Davis.", "look at how fast it goes",
+                       "look at what he did"):
+            assert not AgentRuntime._SIGHT_INTENT.search(phrase), phrase
+
+    def test_real_sight_requests_still_route(self):
+        for phrase in ("take a look at this", "look at my guitar", "look at that",
+                       "can you see me", "look around",
+                       "how many fingers am I holding up"):
+            assert AgentRuntime._SIGHT_INTENT.search(phrase), phrase
+
+
 class TestSpeechHygiene:
     """She must never say her own scaffolding out loud."""
 
