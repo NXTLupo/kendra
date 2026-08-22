@@ -623,6 +623,55 @@ remembered, researched, or did something unless the context supports it.
         remainder = self._META_ONLY.sub("", text, count=1).strip(" ,.:—-")
         return len(remainder.split()) < 8
 
+    @staticmethod
+    def _strip_instruction_echo(answer: str, notes: list[dict[str, Any]]) -> str:
+        """She must never say her own instructions out loud.
+
+        Measured: asked "Who was yelling?" she replied "He said very
+        little, so reply in one short sentence. Do not invent a topic or
+        philosophise..." — the per-turn coaching note, read aloud verbatim.
+        This is a recurring shape (the clock note went the same way), and
+        the general answer is not to write better prose but to CHECK: any
+        sentence of hers that overlaps heavily with a note we injected is
+        not her speech, it is a leak, and it is removed.
+        """
+        note_text = " ".join(str(n.get("content") or "") for n in notes)
+        if not note_text.strip() or not answer.strip():
+            return answer
+
+        def words(value: str) -> list[str]:
+            return re.findall(r"[a-z']+", value.casefold())
+
+        note_shingles = set()
+        note_words = words(note_text)
+        for i in range(max(0, len(note_words) - 4)):
+            note_shingles.add(" ".join(note_words[i:i + 5]))
+        if not note_shingles:
+            return answer
+
+        kept: list[str] = []
+        for sentence in re.split(r"(?<=[.!?])\s+", answer.strip()):
+            sentence_words = words(sentence)
+            if len(sentence_words) < 5:
+                kept.append(sentence)
+                continue
+            shingles = {
+                " ".join(sentence_words[i:i + 5])
+                for i in range(max(0, len(sentence_words) - 4))
+            }
+            overlap = len(shingles & note_shingles) / max(1, len(shingles))
+            if overlap < 0.34:
+                kept.append(sentence)
+            else:
+                LOG.warning("Stripped an instruction echo: %r", sentence[:70])
+        cleaned = " ".join(kept).strip()
+        # What survives must still be a sentence. Stripping the leak once
+        # left the bare fragment "You are", which is worse than silence —
+        # the caller's empty-answer path gives her something to say.
+        if len(cleaned) < 15 or len(re.findall(r"[a-z']+", cleaned.casefold())) < 3:
+            return ""
+        return cleaned
+
     async def _not_a_repeat(self, answer: str, regenerate) -> str:
         """Catch a reply that repeats her recent ones — by comparison.
 
@@ -2738,6 +2787,7 @@ remembered, researched, or did something unless the context supports it.
                 include_self_model=False,
                 exclude_kinds=["episode"],
             )
+            turn_notes = await self._conversation_note(user_text)
             quick = await self._quick_ack_reply(user_text, session_id)
             if quick:
                 await on_delta(quick, "warm")
@@ -2756,7 +2806,7 @@ remembered, researched, or did something unless the context supports it.
                 # conversation; the anti-interview note was previously only
                 # on the non-streaming path, so the question tic survived
                 # every fix. Verify guards on THIS path.
-                *await self._conversation_note(user_text),
+                *turn_notes,
                 {"role": "user", "content": user_text},
             ]
             final_text_parts: list[str] = []
@@ -2771,6 +2821,7 @@ remembered, researched, or did something unless the context supports it.
                 final_text_parts.append(delta)
                 await on_delta(delta, "warm")
             final_text = "".join(final_text_parts).strip()
+            final_text = self._strip_instruction_echo(final_text, turn_notes)
             if not final_text:
                 final_text = "I'm here."
                 await on_delta(final_text, "warm")
