@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import re
 
+from ..phrasing import LEAD_IN, REQUEST_OPENERS
+
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # Checked before "sing": "play me a song" is music, not lyrics.
     ("music", re.compile(r"\bplay\s+(?:me\s+|us\s+)?(?:some\s+|a\s+|the\s+)?"
@@ -36,11 +38,13 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 # The request must be addressed to her, not narration ("I sang today").
 _ADDRESSED = re.compile(
-    r"\b(?:can|could|will|would|please|let'?s|i want you to|i'?d like you to|"
-    r"how about|why don'?t you|do a|do some|give me|make up|write|recite|"
-    r"perform|try|demonstrate|show me|show us|lets hear|let'?s hear|"
-    r"how'?s your|what'?s your)\b|^\s*(?:hey\s+)?kendra\b|^\s*\w+\s+(?:me|us)\b|"
-    r"^\s*(?:sing|hum|rap|dance|laugh|whisper|bow|stretch|play|recite|tell)\b",
+    # A request may open with filler: "Just sing a song", "So play a tune".
+    # Without this, five of six natural phrasings fell through to chat,
+    # where she described the song instead of singing it.
+    rf"^{LEAD_IN}(?:{REQUEST_OPENERS})\b"
+    rf"|^{LEAD_IN}(?:sing|hum|rap|dance|laugh|whisper|bow|stretch|play|"
+    rf"recite|tell|perform)\b"
+    rf"|^{LEAD_IN}\w+\s+(?:me|us)\b",
     re.I,
 )
 

@@ -45,6 +45,22 @@ class TestExpressiveRouting:
                        "rap about black holes", "recite a poem"):
             assert detect_expression(phrase) is not None, phrase
 
+    def test_filler_before_the_verb_still_routes(self):
+        """"Just sing a song" fell through to chat, where she DESCRIBED a song."""
+        for phrase in ("Just sing a song", "just hum something", "So sing me a song",
+                       "Now play a tune", "Well, tell me a joke", "Okay sing something"):
+            assert detect_expression(phrase) is not None, phrase
+
+    def test_movement_and_expression_share_one_vocabulary(self):
+        """The two detectors disagreed: "Now back up" moved her, "Just walk
+        forward" did not."""
+        from kendra.agent.movement import parse_movement
+
+        for phrase in ("Just walk forward", "Now back up", "So turn left",
+                       "Just come here"):
+            assert parse_movement(phrase) is not None, phrase
+        assert parse_movement("I might walk to the store later") is None
+
     def test_conversation_never_triggers_a_performance(self):
         for phrase in ("I play guitar every day", "do you like music",
                        "we listened to a song yesterday", "what music do I like",

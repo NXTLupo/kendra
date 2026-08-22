@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from ..body.locomotion import feet_to_metres
+from ..phrasing import LEAD_IN, REQUEST_OPENERS
 
 Mode = Literal["forward", "backward", "turn", "approach", "retreat", "goto", "sidestep", "stop"]
 
@@ -113,9 +114,9 @@ def _parse_distance(text: str) -> float | None:
 # address, nothing else. "I might walk to the store later" is conversation;
 # a robot that starts walking at hypothetical speech is a hazard.
 _IMPERATIVE_PREFIX = re.compile(
-    r"^(?:\s*(?:hey|hi|okay|ok|now|so|and|then|please|kendra|girl"
-    r"|can you|could you|would you|will you|go ahead and|i want you to"
-    r"|i need you to|i'?d like you to)[,!.\s]*)*$",
+    # Shared with the expressive detector so the two cannot disagree again:
+    # "Now back up" moved her while "Just walk forward" did not.
+    rf"^{LEAD_IN}(?:(?:{REQUEST_OPENERS})[,!.\s]*)?$",
     re.I,
 )
 
