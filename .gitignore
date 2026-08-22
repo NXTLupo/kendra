@@ -49,3 +49,7 @@ hardware/vendor/
 searxng/.env
 searxng/data/*
 !searxng/data/.gitkeep
+
+# Tripo 3D assets (regenerate with scripts/tripo_pipeline.py; 129MB)
+dashboard/public/kendra3d/
+data/tripo/*.glb

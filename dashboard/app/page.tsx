@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { KendraBody } from "../src/KendraBody";
 
 type ServiceState = { ok: boolean; error?: string; detail?: Record<string, unknown> };
 type Turn = { id: number; user_text: string; kendra_text: string; created_at: string; metadata_json?: string };
@@ -403,7 +404,14 @@ export default function Home() {
           <section className="center-stage">
             <div className={`presence-orb ${busy ? "thinking" : ""} ${recording ? "listening" : ""}`} aria-label={recording ? "Kendra is listening" : busy ? "Kendra is working" : "Kendra is ready"}>
               <div className="halo halo-one" /><div className="halo halo-two" />
-              <div className="kendra-portrait"><img src="./kendra-reference.png" alt="Kendra, a small fuzzy blue spider with large reflective eyes" /></div>
+              <div className="kendra-portrait">
+                <KendraBody
+                  pose={snapshot?.body?.pose}
+                  busy={busy}
+                  latestReply={turns.length ? (turns[turns.length - 1]?.kendra_text ?? null) : null}
+                  listening={Boolean(voiceReady) && !busy}
+                />
+              </div>
               <span className="presence-shadow" />
             </div>
             <div className="presence-copy">

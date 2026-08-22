@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "main": "electron/main.mjs",
-  "engines": { "node": ">=22.13.0" },
+  "engines": {
+    "node": ">=22.13.0"
+  },
   "scripts": {
     "dev:renderer": "vite",
     "desktop": "electron electron/main.mjs",
@@ -14,8 +16,10 @@
     "lint": "eslint app src electron vite.config.ts"
   },
   "dependencies": {
+    "@types/three": "^0.185.4",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
