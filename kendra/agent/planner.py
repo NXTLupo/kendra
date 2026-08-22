@@ -574,6 +574,111 @@ remembered, researched, or did something unless the context supports it.
                 bad.append(noun)
         return sorted(set(bad))
 
+    # Talk ABOUT doing the thing, rather than the thing. This is one failure
+    # mode wearing different costumes: "I did a quick search — here are the
+    # headlines" with no headlines, "I can try. What kind of song?" instead
+    # of singing, "I can run a quiz. Ready?" instead of asking a question.
+    # Guarding each of those separately meant every new capability needed
+    # its own patch, so it is caught once, here, by shape.
+    _META_ONLY = re.compile(
+        r"^\W*(?:"
+        r"(?:sure|okay|ok|alright|yes)[,.!\s]*)?"
+        r"(?:i(?:'| a)?m going to|i'?ll|i will|i can|i could|let me|"
+        r"i(?:'ve| have)? (?:did|done|made|run|ran)|here(?:'s| is| are)|"
+        r"i did a|i just did|i tried)\b",
+        re.I,
+    )
+    # A request that expects a PRODUCT, not a conversational reply.
+    _ASKED_FOR_PRODUCT = re.compile(
+        r"\b(?:sing|hum|rap|play|recite|perform|dance|tell me a|make (?:me )?a|"
+        r"write|compose|create|give me|list|research|look up|search|find out|"
+        r"read me|show me|quiz|test me|describe|explain)\b",
+        re.I,
+    )
+
+    def _looks_undelivered(self, answer: str, user_text: str,
+                           has_product=None) -> bool:
+        """Did she talk about doing it instead of doing it?
+
+        Shape alone cannot always tell: "I did a quick search on what is
+        trending online — here are the headlines from my local research" is
+        fifteen words of pure meta. So the caller may supply has_product,
+        the one thing only it knows — for research, that the answer shares
+        content with the evidence; for a quiz, that a question was actually
+        asked. Shape catches the obvious cases; the predicate catches the
+        articulate ones.
+        """
+        if not self._ASKED_FOR_PRODUCT.search(user_text or ""):
+            return False
+        text = (answer or "").strip()
+        if not text:
+            return True
+        if has_product is not None and not has_product(text):
+            return True
+        # A clarifying question when he already said what he wanted.
+        if text.endswith("?") and len(text.split()) <= 25:
+            return True
+        if not self._META_ONLY.match(text):
+            return False
+        remainder = self._META_ONLY.sub("", text, count=1).strip(" ,.:—-")
+        return len(remainder.split()) < 8
+
+    async def _ensure_delivered(self, answer: str, user_text: str,
+                                regenerate, fallback=None, has_product=None) -> str:
+        """One guard for every 'announced but produced nothing' failure."""
+        if not self._looks_undelivered(answer, user_text, has_product):
+            return answer
+        LOG.warning("Undelivered reply to %r: %r", user_text[:40], answer[:70])
+        try:
+            fresh = (await regenerate()).strip()
+        except Exception:
+            fresh = ""
+        if fresh and not self._looks_undelivered(fresh, user_text):
+            return fresh
+        if fallback is not None:
+            try:
+                produced = fallback()
+                if produced:
+                    return produced
+            except Exception:
+                LOG.debug("delivery fallback failed", exc_info=True)
+        return answer
+
+    async def _delivery_guard(self, answer: str, evidence: dict[str, Any]) -> str:
+        """A research answer that states nothing is a failed answer.
+
+        Measured: asked for today's news she searched successfully (three
+        real headlines in 1.4 s) and then said only "I did a quick search on
+        what is trending online — here are the headlines from my local
+        research." The announcement IS the whole reply. Prompting her to
+        lead with findings does not reliably beat a 1.7B model's habit of
+        introducing itself, so when the answer carries none of the evidence
+        the headlines are spoken directly instead.
+        """
+        sources = (evidence or {}).get("sources") or []
+        if not sources:
+            return answer
+        titles = [str(s.get("title") or "").strip() for s in sources[:3]]
+        titles = [x for x in titles if x]
+        if not titles:
+            return answer
+
+        from ..brain.store import _content_words
+
+        evidence_words = set()
+        for source in sources[:3]:
+            evidence_words |= _content_words(
+                f"{source.get('title', '')} {source.get('snippet') or source.get('text') or ''}"
+            )
+        shared = _content_words(answer) & evidence_words
+        if len(shared) >= 2:
+            return answer  # she actually reported something
+        # (This is the research flavour of _looks_undelivered's has_product
+        # test: nothing from the sources reached the answer.)
+        LOG.warning("Research answer delivered nothing; speaking the sources: %r", answer[:70])
+        spoken = "; ".join(re.sub(r"\s*[-|–]\s*[A-Z][\w .]+$", "", x) for x in titles)
+        return f"Here's what's leading right now: {spoken}."
+
     async def _grounding_guard(self, answer: str, evidence: dict[str, Any],
                                user_text: str, regenerate) -> str:
         """Research answers may only contain what the sources actually say.
@@ -1883,10 +1988,12 @@ remembered, researched, or did something unless the context supports it.
         # She told him "I am building you a mind" — exactly backwards, and
         # the kind of role swap a small model makes when both parties are
         # discussed in one sentence.
-        notes.append(
-            "Keep the roles straight: Jonathan is the human who is building YOU. "
-            "You are the robot being built. Never say you are building him."
-        )
+        # A verbose role instruction naming both parties made this WORSE:
+        # told "Jonathan is a human, he is building YOU", she replied "You
+        # are not a human, Jonathan. You are Kendra." The model copies the
+        # sentence structure rather than applying it. One short positive
+        # statement, no contrastive pairs, no negations.
+        notes.append("You are Kendra, the robot. You are speaking to Jonathan.")
         # She recycled whole clauses from earlier answers — "it's like
         # choosing between a carefully crafted meal and a quick bite"
         # reappeared turns later, and an amnesia definition resurfaced as a
@@ -2283,6 +2390,7 @@ remembered, researched, or did something unless the context supports it.
                     max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
                 ),
             )
+            final_text = await self._delivery_guard(final_text, evidence if isinstance(evidence, dict) else {})
             if (evidence.get("mode") != "brain-cache" and evidence.get("sources")
                     and getattr(self, "_last_answer_grounded", True)):
                 self._consolidate_research_soon(user_text, final_text, evidence, session_id)
@@ -2640,6 +2748,32 @@ remembered, researched, or did something unless the context supports it.
             if not final_text:
                 final_text = "I'm here."
                 await on_delta(final_text, "warm")
+            else:
+                # One guard for every "announced it but produced nothing"
+                # failure — the same shape whether she was asked to sing,
+                # quiz, list or look something up.
+                delivered = await self._ensure_delivered(
+                    final_text,
+                    user_text,
+                    regenerate=lambda: self.llm.chat(
+                        [
+                            {"role": "system", "content": self._conversation_prompt()},
+                            {"role": "system", "content": (
+                                "You replied by describing what you would do instead of "
+                                "doing it. Produce the actual thing he asked for now, in "
+                                "full, in your own spoken words. No preamble, no offer, "
+                                "no question about what he wants."
+                            )},
+                            {"role": "user", "content": user_text},
+                        ],
+                        max_tokens=self._answer_budget(True),
+                        temperature=0.8,
+                        id_slot=self.CONVERSATION_SLOT,
+                    ),
+                )
+                if delivered != final_text:
+                    await on_delta(" " + delivered, "warm")
+                    final_text = delivered
             result = await self._remember_plain_turn(
                 session_id,
                 user_text,
@@ -2886,6 +3020,7 @@ remembered, researched, or did something unless the context supports it.
                     max_tokens=int(self.settings.get("llm.conversation_max_tokens", 160)),
                 ),
             )
+            checked = await self._delivery_guard(checked, evidence if isinstance(evidence, dict) else {})
             if checked != final_text:
                 # Do NOT re-send the corrected text as speech: the original
                 # has already streamed, so resending near-identical wording
