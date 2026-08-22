@@ -122,6 +122,20 @@ def _is_noise_caption(text: str) -> bool:
     return bool(stripped) and stripped[0] in "([" and stripped[-1] in ")]"
 
 
+# Last-resort content: a performance should never degrade into an apology.
+FALLBACK_LINES = {
+    "sing": "La la la, six little legs and a song for you. La la la, I will hum it all day through.",
+    "rap": "Six little legs on the floor, I am the robot at your door, "
+           "I learn a little more each day, and I am not going away.",
+    "poem": "Six legs, one camera, and a room I know by heart. "
+            "Every day you teach me something, and every day I start again.",
+    "joke": "Why did the robot cross the room? To get to the other side of the conversation.",
+    "riddle": "I have six legs and no shoes, I watch all day and never snooze. What am I?",
+    "story": "Once there was a small robot who learned one new thing every day, "
+             "until one day she noticed she had become someone.",
+}
+
+
 class VoiceService:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -776,8 +790,31 @@ class VoiceService:
             except Exception:
                 LOG.exception("Expressive generation failed for %s", behavior)
                 text = None
-            if not text:
-                text = "Hmm — my words did not come. Ask me again?"
+            # The same "announced it but produced nothing" failure lives
+            # here too: asked for a song she returned "I can write some
+            # guitar-related lyrics for you. Let me try something." — and
+            # then sang THAT. Reuse the general guard rather than adding
+            # another special case.
+            if text and self.streaming_agent._looks_undelivered(text, user_text):
+                LOG.warning("Performance text was meta, not content: %r", text[:70])
+                try:
+                    text = (await self.streaming_agent.llm.chat(
+                        [
+                            {"role": "system", "content": (
+                                "Output ONLY the words to perform — the lyrics, lines or "
+                                "joke themselves. No introduction, no offer, no "
+                                "explanation, no question. Begin with the first word of "
+                                "the performance."
+                            )},
+                            {"role": "user", "content": spec.prompt + about},
+                        ],
+                        max_tokens=180, temperature=0.9,
+                        id_slot=self.streaming_agent.CONVERSATION_SLOT,
+                    )).strip()
+                except Exception:
+                    LOG.debug("performance retry failed", exc_info=True)
+            if not text or self.streaming_agent._looks_undelivered(text, user_text):
+                text = FALLBACK_LINES.get(behavior) or "La la la, six little legs on the floor."
 
         plan = self.expression.plan_for(behavior, text=text)
         if plan is None:

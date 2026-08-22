@@ -623,6 +623,40 @@ remembered, researched, or did something unless the context supports it.
         remainder = self._META_ONLY.sub("", text, count=1).strip(" ,.:—-")
         return len(remainder.split()) < 8
 
+    async def _not_a_repeat(self, answer: str, regenerate) -> str:
+        """Catch a reply that repeats her recent ones — by comparison.
+
+        The safe direction: never show her the old text, only measure
+        against it. She replayed three of her own answers verbatim when a
+        prompt quoted them at her, so detection lives entirely outside the
+        model and the retry instruction stays generic.
+        """
+        text = (answer or "").strip()
+        if len(text) < 20:
+            return answer
+        try:
+            recent = await self.brain.recent_turns(limit=4, max_age_seconds=1800)
+        except Exception:
+            return answer
+
+        def shingles(value: str) -> set[str]:
+            words = re.findall(r"[a-z']+", value.casefold())
+            return {" ".join(words[i:i + 5]) for i in range(max(0, len(words) - 4))}
+
+        fresh = shingles(text)
+        if not fresh:
+            return answer
+        for turn in recent or []:
+            past = shingles(str(turn.get("kendra_text") or ""))
+            if past and len(fresh & past) / len(fresh) > 0.35:
+                LOG.warning("Repeat of an earlier reply: %r", text[:70])
+                try:
+                    retry = (await regenerate()).strip()
+                except Exception:
+                    return answer
+                return retry or answer
+        return answer
+
     async def _ensure_delivered(self, answer: str, user_text: str,
                                 regenerate, fallback=None, has_product=None) -> str:
         """One guard for every 'announced but produced nothing' failure."""
@@ -1994,21 +2028,13 @@ remembered, researched, or did something unless the context supports it.
         # sentence structure rather than applying it. One short positive
         # statement, no contrastive pairs, no negations.
         notes.append("You are Kendra, the robot. You are speaking to Jonathan.")
-        # She recycled whole clauses from earlier answers — "it's like
-        # choosing between a carefully crafted meal and a quick bite"
-        # reappeared turns later, and an amnesia definition resurfaced as a
-        # reply to "Okay." The transcript in her context is there so she
-        # knows what was SAID, not as a phrase bank.
-        if recent:
-            previous = " ".join(
-                str(turn.get("kendra_text") or "") for turn in recent
-            )[:400]
-            if previous.strip():
-                notes.append(
-                    "You already said the following earlier in this conversation. "
-                    "Do NOT reuse these sentences, phrases or comparisons — say "
-                    f"something new: \"{previous}\""
-                )
+        # DO NOT quote her own previous replies back to her. An earlier
+        # version of this note pasted her last four answers in with "do not
+        # reuse these" — and she read the whole block out loud as her next
+        # reply. Negation over quoted text is worse than useless on a 1.7B
+        # model: the quote is what it copies. Repetition is handled after
+        # generation instead, by comparison, never by instruction.
+        notes.append("Say something you have not said yet in this conversation.")
         return [{"role": "system", "content": " ".join(notes)}]
 
     async def _plain_turn(
@@ -2774,6 +2800,24 @@ remembered, researched, or did something unless the context supports it.
                 if delivered != final_text:
                     await on_delta(" " + delivered, "warm")
                     final_text = delivered
+                fresh_text = await self._not_a_repeat(
+                    final_text,
+                    regenerate=lambda: self.llm.chat(
+                        [
+                            {"role": "system", "content": self._conversation_prompt()},
+                            {"role": "system", "content": (
+                                "Answer again in completely different words, with a "
+                                "different thought. One or two short sentences."
+                            )},
+                            {"role": "user", "content": user_text},
+                        ],
+                        max_tokens=90, temperature=0.95,
+                        id_slot=self.CONVERSATION_SLOT,
+                    ),
+                )
+                if fresh_text != final_text:
+                    await on_delta(" " + fresh_text, "warm")
+                    final_text = fresh_text
             result = await self._remember_plain_turn(
                 session_id,
                 user_text,

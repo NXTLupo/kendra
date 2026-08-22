@@ -202,3 +202,45 @@ def play_tune(name: str = "little_wander", bpm: int = 108, volume: float = 0.18)
     audio = np.concatenate(pieces)
     peak = float(np.max(np.abs(audio))) or 1.0
     return (audio / peak * volume * 32767).astype(np.int16)
+
+
+# ------------------------------------------------------------- her singing
+# Jonathan's correction, and it is the right one: speeding speech up and
+# down is not singing. Her singing voice is the synthesized tone voice —
+# the same nasal, vibrato timbre as her humming — carrying an actual tune.
+# She is a robot; this IS her voice, not an imitation of a human one.
+#
+# Songs are built from a contour of scale degrees over a simple rhythm, so
+# every performance is a different tune rather than one canned jingle.
+SONG_SHAPES: dict[str, list[tuple[int, float]]] = {
+    # (scale degree, beats) over a major scale
+    "bright":   [(0,1),(2,1),(4,1),(2,1),(5,1),(4,1),(2,2),
+                 (4,1),(5,1),(7,1),(5,1),(4,2)],
+    "wistful":  [(5,1.5),(4,0.5),(2,1),(0,1),(2,1),(4,1.5),(2,0.5),(0,2)],
+    "playful":  [(0,0.5),(2,0.5),(4,0.5),(5,0.5),(4,0.5),(2,0.5),(4,1),
+                 (7,0.5),(5,0.5),(4,1),(2,1.5)],
+    "lullaby":  [(4,1.5),(2,0.5),(0,2),(2,1),(4,1),(2,1.5),(0,2.5)],
+}
+_MAJOR = [0, 2, 4, 5, 7, 9, 11, 12]
+
+
+def sing_melody(shape: str = "bright", root_hz: float = 293.66,
+                bpm: int = 96, volume: float = 0.20) -> np.ndarray:
+    """Her singing voice: a tune in her own tone, with breath between phrases."""
+    contour = SONG_SHAPES.get(shape) or SONG_SHAPES["bright"]
+    beat = 60.0 / max(50, bpm)
+    pieces: list[np.ndarray] = []
+    for index, (degree, beats) in enumerate(contour):
+        semitones = _MAJOR[degree % len(_MAJOR)] + 12 * (degree // len(_MAJOR))
+        freq = root_hz * (2 ** (semitones / 12.0))
+        seconds = beat * beats
+        # Held notes get a longer decay so they sing rather than blip.
+        pieces.append(_note(freq, seconds, volume))
+        # A small breath every few notes, as a singer phrases.
+        if index and index % 4 == 3:
+            pieces.append(np.zeros(int(SAMPLE_RATE * 0.14)))
+        else:
+            pieces.append(np.zeros(int(SAMPLE_RATE * 0.02)))
+    audio = np.concatenate(pieces)
+    peak = float(np.max(np.abs(audio))) or 1.0
+    return (audio / peak * volume * 32767).astype(np.int16)

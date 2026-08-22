@@ -38,6 +38,7 @@ class ExpressionEngine:
         self.render_line = render_line
         self._last_hum: str | None = None
         self._last_tune: str | None = None
+        self._last_song: str | None = None
         self._current: asyncio.Task | None = None
         self._last_performed: dict[str, float] = {}
         self._recent: list[str] = []
@@ -81,18 +82,6 @@ class ExpressionEngine:
         # grapheme for a closed mouth, and it renders one flat pitch per
         # utterance, so a "song" came out as speech with stretched vowels.
         # Both are handled below by generating or reshaping waveforms.
-        audio_only = False
-        if plan.vocal_style == "humming":
-            spoken = await self._perform_hum(plan)
-            audio_only = True  # she hums; she does not say "hums"
-        elif plan.behavior == "music":
-            spoken = await self._perform_music(plan)
-            audio_only = True
-        elif plan.vocal_style == "singing" and self.render_line is not None:
-            sung = await self._perform_song(plan)
-            if sung:
-                spoken = sung
-
         async def choreograph() -> None:
             # Body loops for the whole performance rather than gesturing
             # once at the start: she should still be moving on the last line.
@@ -102,8 +91,27 @@ class ExpressionEngine:
                 if plan.head_behavior:
                     await perform(self.body, plan.head_behavior, plan.motion_intensity * 0.8)
 
+        # Motion starts FIRST so the body is already moving while the audio
+        # plays. Previously the sung and hummed audio was produced before
+        # the choreography task existed, so she performed and then danced.
         motion = asyncio.create_task(choreograph(), name=f"kendra-express-{plan.behavior}")
         try:
+            # Wordless sounds and melody are AUDIO problems, not text
+            # problems: Kokoro spells "Hmm" as H-M-M, and renders one flat
+            # pitch per utterance so a "song" came out as speech with
+            # stretched vowels. These branches play waveforms and must NOT
+            # then be spoken — singing did exactly that, rendering the
+            # lyrics twice and cutting itself off mid-performance.
+            audio_only = False
+            if plan.vocal_style == "humming":
+                spoken = await self._perform_hum(plan)
+                audio_only = True
+            elif plan.behavior == "music":
+                spoken = await self._perform_music(plan)
+                audio_only = True
+            elif plan.vocal_style == "singing":
+                spoken = await self._perform_singing(plan)
+                audio_only = True
             if spoken and not audio_only:
                 await speak(spoken, affect)
         finally:
@@ -144,6 +152,29 @@ class ExpressionEngine:
         self._last_tune = name
         await asyncio.to_thread(play, play_tune(name))
         return f"(plays {name.replace('_', ' ')})"
+
+    async def _perform_singing(self, plan: ExpressionPlan) -> str:
+        """Her singing voice: the synth tone carrying a tune.
+
+        Jonathan's correction, and it is right: speeding speech up and down
+        is not singing. Her voice is the synthesized tone — the same nasal
+        vibrato timbre as her humming — carrying an actual melody. She is a
+        robot, so this IS her singing voice rather than an imitation of a
+        human one. The generated lyrics still reach the transcript so the
+        words are there to read; the AUDIO is her own instrument.
+        """
+        import random as _random
+
+        from .nonverbal import SONG_SHAPES, play, sing_melody
+
+        shape = _random.choice(
+            [s for s in SONG_SHAPES if s != self._last_song] or list(SONG_SHAPES)
+        )
+        self._last_song = shape
+        tempo = plan.tempo_bpm or 96
+        await asyncio.to_thread(play, sing_melody(shape, bpm=tempo))
+        words = (plan.text or "").strip()
+        return f"(sings, {shape}) {words}" if words else f"(sings, {shape})"
 
     async def _perform_song(self, plan: ExpressionPlan) -> str | None:
         """Sing by giving each line its own pitch — a melody, not monotone."""
