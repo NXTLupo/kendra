@@ -14,6 +14,7 @@ from typing import Any
 
 from ..agent.planner import AgentRuntime
 from ..config import Settings
+from ..facebus import FaceBusPublisher
 from ..ipc import UnixJsonClient, UnixJsonServer
 from .acks import AckPlayer, ThinkingSounds
 from .asr import build_asr
@@ -151,6 +152,9 @@ class VoiceService:
         self.settings = settings
         self.asr = build_asr(settings)
         self.tts = create_tts(settings)
+        # Everything drawing Kendra reads this bus. Fire-and-forget: if the
+        # desktop app is not running, publishing is a no-op.
+        self.face = FaceBusPublisher(settings)
         self.acks = AckPlayer(settings, self.tts)
         self.thinking_sounds = ThinkingSounds(settings)
         self.audio = LocalAudioCapture(settings)
@@ -172,6 +176,7 @@ class VoiceService:
             body=self.body,
             leds=UnixJsonClient(settings.runtime_dir / "leds.sock", timeout=3),
             render_line=self._render_line,
+            on_audio=self._performance_audio,
         )
         self.spontaneity = SpontaneityScheduler(settings)
         self._capture_lock = asyncio.Lock()
@@ -216,10 +221,14 @@ class VoiceService:
         return made
 
     def _leds(self, **fields: object) -> None:
-        """Fire-and-forget light state — her body must never wait on LEDs.
+        """Fire-and-forget outward state — her body must never wait on it.
 
-        On the robot these are the two WS2812 modules; on the desktop the
-        driver is a no-op, so the same calls run on both bodies.
+        One signal, two subscribers. On the robot these are the two WS2812
+        modules; on the desktop that driver is a no-op, so for months this
+        computed exactly the right description of what she was doing and threw
+        it away, while her face polled a transcript every three seconds and
+        animated replies that had already finished. Both now read the same
+        call, so the lights and the picture can never disagree.
         """
         async def send() -> None:
             try:
@@ -230,6 +239,50 @@ class VoiceService:
 
         task = asyncio.create_task(send(), name="kendra-leds")
         task.add_done_callback(lambda _t: None)
+        self._publish_state(fields)
+
+    def _publish_state(self, fields: dict[str, object]) -> None:
+        """Translate a light state into the event her face draws from."""
+        if fields.get("thinking"):
+            self.face.publish("thinking", mode=str(fields.get("thinking_mode") or "think"))
+        elif "thinking" in fields:
+            self.face.publish("idle")
+        if fields.get("listening"):
+            self.face.publish("listening")
+
+    def _performance_audio(self, phase: str, text: str, seconds: float, kind: str) -> None:
+        """A song, a hum or a tune is speech as far as her face is concerned.
+
+        Performances play raw PCM through `nonverbal.play` and never touch the
+        TTS engine, so without this her mouth stayed shut through every song.
+        """
+        if phase == "start":
+            self.face.publish("speech_start", text=text[:400], seconds=seconds, kind=kind)
+        else:
+            self.face.publish("speech_end")
+
+    def _bind_speech_clock(self) -> None:
+        """Let her mouth start on the first real sample, not on a poll.
+
+        The callbacks fire on the audio playback thread, so they hop back to
+        the service loop to publish. ``seconds`` is exact for Kokoro (sample
+        count over sample rate) and 0.0 for Piper, which streams and cannot
+        know its own length until it ends -- her face treats 0.0 as "hold
+        until speech_end" rather than inventing a finish time.
+        """
+        loop = asyncio.get_running_loop()
+
+        def started(text: str, seconds: float) -> None:
+            self.face.publish_threadsafe(loop, "speech_start", text=text[:400], seconds=seconds)
+
+        def ended() -> None:
+            self.face.publish_threadsafe(loop, "speech_end")
+
+        for engine in {self.tts, getattr(self.acks, "tts", None)}:
+            clock = getattr(engine, "clock", None)
+            if clock is not None:
+                clock.on_start = started
+                clock.on_end = ended
 
     def _play_cached(self, text: str, affect: str) -> bool:
         path = getattr(self, "_phrase_cache", {}).get((text.strip(), affect))
@@ -244,8 +297,12 @@ class VoiceService:
             with wave.open(str(path), "rb") as clip:
                 rate = clip.getframerate()
                 frames = np.frombuffer(clip.readframes(clip.getnframes()), dtype=np.int16)
+            # Pre-rendered clips never touch the TTS engine, so they would
+            # otherwise be the one kind of speech her face could not see.
+            self.face.publish("speech_start", text=text[:400], seconds=len(frames) / float(rate or 1))
             sd.play(frames, rate)
             sd.wait()
+            self.face.publish("speech_end")
             return True
         except Exception:
             LOG.debug("Cached phrase playback failed", exc_info=True)
@@ -461,6 +518,9 @@ class VoiceService:
             # microphone capture: the KV cache is warm before ASR finishes.
             prewarm = asyncio.create_task(self.streaming_agent.prewarm_conversation())
             prewarm.add_done_callback(lambda _t: None)
+            # The microphone is open now. Her face should show that while he is
+            # still talking, not after the turn is recorded.
+            self.face.publish("listening")
             await asyncio.to_thread(
                 self.audio.capture_utterance,
                 wav,
@@ -468,6 +528,22 @@ class VoiceService:
                 threshold_multiplier,
                 self.thinking_sounds.stop,
             )
+            if getattr(self.audio, "no_microphone", False):
+                # Say it rather than sitting there. A companion that cannot
+                # hear looks identical to a companion that has crashed, and
+                # "she's dead" is the report we keep getting for it.
+                if not getattr(self, "_announced_deaf", False):
+                    self._announced_deaf = True
+                    LOG.error(
+                        "NO WORKING MICROPHONE: every input returned silence. On macOS an "
+                        "unauthorized mic opens fine and returns zeros -- check System "
+                        "Settings > Privacy & Security > Microphone for this app and for "
+                        "Terminal, and check nothing else has seized the input."
+                    )
+                self.face.publish("deaf")
+            elif not self.audio.last_capture_speech:
+                self._announced_deaf = False
+                self.face.publish("idle")
             # She heard you: acknowledge instantly while ASR and the LLM run —
             # but only when speech was actually captured. Acknowledging a
             # silent timeout makes her sound broken.
@@ -1227,6 +1303,9 @@ class VoiceService:
         import os
 
         os.environ.setdefault("KENDRA_VOICE_STARTED_AT", str(time.time()))
+        # Her mouth is driven from real playback, so the clock must be bound
+        # before anything can speak.
+        self._bind_speech_clock()
         await self.server.start()
         # Warm the KV cache at startup so the first turn of the day does not
         # pay the full cold prefill.

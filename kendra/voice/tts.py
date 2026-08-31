@@ -66,6 +66,43 @@ AFFECTS: dict[str, AffectProfile] = {
 }
 
 
+class SpeechClock:
+    """Reports when audio really starts and how long it really is.
+
+    Her mouth used to be animated from a character count -- 13 chars/sec in the
+    renderer, `len(text) * 0.07` in the voice service -- two independent
+    guesses at something the audio layer knows exactly. A synthesized buffer
+    has a sample count and a sample rate, so its duration is arithmetic, not
+    estimation. Anything drawing Kendra subscribes here and is correct by
+    construction.
+
+    Callbacks run on the audio playback thread and must not block. Failures are
+    swallowed: a missed animation frame may never cost her a spoken word.
+    """
+
+    def __init__(self) -> None:
+        self.on_start: Any | None = None   # (text: str, seconds: float) -> None
+        self.on_end: Any | None = None     # () -> None
+
+    def started(self, text: str, seconds: float) -> None:
+        callback = self.on_start
+        if callback is None:
+            return
+        try:
+            callback(text, float(seconds))
+        except Exception:
+            pass
+
+    def ended(self) -> None:
+        callback = self.on_end
+        if callback is None:
+            return
+        try:
+            callback()
+        except Exception:
+            pass
+
+
 class PiperTTS:
     """Persistent, local Piper voice with chunk-streamed playback.
 
@@ -83,6 +120,7 @@ class PiperTTS:
         self._load_lock = threading.Lock()
         self._speak_lock = asyncio.Lock()
         self._stop_event = threading.Event()
+        self.clock = SpeechClock()
 
     def _load(self):
         if self._voice is not None:
@@ -126,6 +164,7 @@ class PiperTTS:
         )
         self._stop_event.clear()
         stream = None
+        announced = False
         try:
             for chunk in voice.synthesize(text, syn_config=config):
                 if self._stop_event.is_set():
@@ -139,11 +178,20 @@ class PiperTTS:
                         blocksize=0,
                     )
                     stream.start()
+                if not announced:
+                    # Piper streams, so the total length is not known when the
+                    # first sample plays. Seconds of 0 means "unknown": her
+                    # face paces the syllables from the text and holds until
+                    # speech_end rather than guessing an end time.
+                    announced = True
+                    self.clock.started(text, 0.0)
                 stream.write(audio.tobytes())
         finally:
             if stream is not None:
                 stream.stop()
                 stream.close()
+            if announced:
+                self.clock.ended()
 
     async def speak(self, text: str, affect: str | None = None) -> None:
         value = speakable(text)
@@ -207,6 +255,7 @@ class KokoroTTS:
         self._load_lock = threading.Lock()
         self._speak_lock = asyncio.Lock()
         self._stop_event = threading.Event()
+        self.clock = SpeechClock()
 
     def _load(self):
         if self._engine is not None:
@@ -267,7 +316,11 @@ class KokoroTTS:
         self._stop_event.clear()
         stream = sd.RawOutputStream(samplerate=sample_rate, channels=1, dtype="int16", blocksize=0)
         stream.start()
+        # The exact length of this utterance, known before a single sample is
+        # played. No estimate anywhere in the chain from here to her mouth.
+        seconds = audio.shape[0] / float(sample_rate or 1)
         try:
+            self.clock.started(text, seconds)
             # Chunked writes so a stop request lands mid-sentence, not after.
             step = sample_rate // 4
             for start in range(0, audio.shape[0], step):
@@ -277,6 +330,7 @@ class KokoroTTS:
         finally:
             stream.stop()
             stream.close()
+            self.clock.ended()
 
     async def speak(self, text: str, affect: str | None = None) -> None:
         value = speakable(text)

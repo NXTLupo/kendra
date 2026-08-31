@@ -31,17 +31,52 @@ LOG = logging.getLogger(__name__)
 
 
 class ExpressionEngine:
-    def __init__(self, body: Any, leds: Any = None, render_line: Any = None):
+    def __init__(self, body: Any, leds: Any = None, render_line: Any = None,
+                 on_audio: Any = None):
         self.body = body
         self.leds = leds
         # async (text, affect) -> int16 numpy audio, used for sung lines.
         self.render_line = render_line
+        # (phase, text, seconds, kind) -> None. How her face learns a
+        # performance is happening: every one of these plays raw PCM through
+        # `nonverbal.play`, which never touches the TTS engine, so her mouth
+        # sat perfectly still through every song she has ever sung.
+        self.on_audio = on_audio
         self._last_hum: str | None = None
         self._last_tune: str | None = None
         self._last_song: str | None = None
         self._current: asyncio.Task | None = None
         self._last_performed: dict[str, float] = {}
         self._recent: list[str] = []
+
+    async def _play_audio(self, audio: Any, text: str = "", kind: str = "song") -> None:
+        """Play a performance, and tell whatever is drawing her that it started.
+
+        The duration is the array's own length over the sample rate — exact,
+        like every other timing in her voice path. `kind` distinguishes sung
+        words (which have syllables to shape a mouth) from a hum or a tune
+        (which have none, and want a sustained open mouth instead).
+        """
+        from .nonverbal import SAMPLE_RATE, play
+
+        seconds = 0.0
+        try:
+            seconds = float(len(audio)) / float(SAMPLE_RATE)
+        except (TypeError, ValueError):
+            pass
+        if self.on_audio is not None:
+            try:
+                self.on_audio("start", text, seconds, kind)
+            except Exception:
+                LOG.debug("face event dropped", exc_info=True)
+        try:
+            await asyncio.to_thread(play, audio)
+        finally:
+            if self.on_audio is not None:
+                try:
+                    self.on_audio("end", "", 0.0, kind)
+                except Exception:
+                    LOG.debug("face event dropped", exc_info=True)
 
     # ---------------------------------------------------------- planning
     def plan_for(self, behavior: str, text: str | None = None,
@@ -133,12 +168,12 @@ class ExpressionEngine:
         """A real hum: synthesized tone with vibrato, never spoken letters."""
         import random as _random
 
-        from .nonverbal import CONTOURS, hum, play
+        from .nonverbal import CONTOURS, hum
 
         style = _random.choice([s for s in CONTOURS if s != self._last_hum] or list(CONTOURS))
         self._last_hum = style
         audio = hum(style)
-        await asyncio.to_thread(play, audio)
+        await self._play_audio(audio, kind="hum")
         return f"(hums, {style})"
 
     async def _perform_music(self, plan: ExpressionPlan) -> str:
@@ -146,11 +181,11 @@ class ExpressionEngine:
         used musically. No model, no TTS: instant, and identical on the Pi."""
         import random as _random
 
-        from .nonverbal import TUNES, play, play_tune
+        from .nonverbal import TUNES, play_tune
 
         name = _random.choice([n for n in TUNES if n != self._last_tune] or list(TUNES))
         self._last_tune = name
-        await asyncio.to_thread(play, play_tune(name))
+        await self._play_audio(play_tune(name), kind="tune")
         return f"(plays {name.replace('_', ' ')})"
 
     async def _perform_singing(self, plan: ExpressionPlan) -> str:
@@ -165,22 +200,22 @@ class ExpressionEngine:
         """
         import random as _random
 
-        from .nonverbal import SONG_SHAPES, play, sing_melody
+        from .nonverbal import SONG_SHAPES, sing_melody
 
         shape = _random.choice(
             [s for s in SONG_SHAPES if s != self._last_song] or list(SONG_SHAPES)
         )
         self._last_song = shape
         tempo = plan.tempo_bpm or 96
-        await asyncio.to_thread(play, sing_melody(shape, bpm=tempo))
         words = (plan.text or "").strip()
+        await self._play_audio(sing_melody(shape, bpm=tempo), words, kind="song")
         return f"(sings, {shape}) {words}" if words else f"(sings, {shape})"
 
     async def _perform_song(self, plan: ExpressionPlan) -> str | None:
         """Sing by giving each line its own pitch — a melody, not monotone."""
         import numpy as np
 
-        from .nonverbal import apply_melody, play
+        from .nonverbal import apply_melody
 
         lines = [ln.strip() for ln in re.split(r"[\n.]+", plan.text or "") if ln.strip()]
         if not lines:
@@ -193,7 +228,11 @@ class ExpressionEngine:
         if not rendered:
             return None
         melody = "lullaby" if plan.motion_intensity < 0.35 else "simple"
-        await asyncio.to_thread(play, apply_melody(rendered, melody))
+        await self._play_audio(
+            apply_melody(rendered, melody),
+            " ".join(line.rstrip(".") + "." for line in lines[:8]),
+            kind="song",
+        )
         # Joined with a slash this went into her transcript AND her history,
         # and she then read the punctuation out: "why do you keep saying
         # slash?". Transcripts must contain only speakable text.

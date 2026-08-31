@@ -18,9 +18,14 @@ from ..phrasing import LEAD_IN, REQUEST_OPENERS
 
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     # Checked before "sing": "play me a song" is music, not lyrics.
+    # "Use your synthesizer" is how he asks for it, and it matched nothing:
+    # only "play your synth" was listed, so she answered with small talk
+    # about keyboards. Any verb against the synth counts.
     ("music", re.compile(r"\bplay\s+(?:me\s+|us\s+)?(?:some\s+|a\s+|the\s+)?"
                          r"(?:music|tune|song|something|melody)\b"
-                         r"|\bplay your synth\w*\b|\bmake some music\b", re.I)),
+                         r"|\bsynthesi[sz]er\b|\bsynth\b"
+                         r"|\b(?:use|play|start|fire up)\s+(?:your|the)\s+synth\w*\b"
+                         r"|\bmake some music\b", re.I)),
     ("sing", re.compile(r"\b(?:sing|sings|singing|serenade)\b", re.I)),
     ("hum", re.compile(r"\bhum(?:ming)?\b(?!an)", re.I)),
     ("rap", re.compile(r"\brap(?:ping)?\b(?!id|port|t)|\bfreestyle\b|\bspit (?:a |some )?(?:bars|rhymes)\b", re.I)),
@@ -43,8 +48,15 @@ _ADDRESSED = re.compile(
     # where she described the song instead of singing it.
     rf"^{LEAD_IN}(?:{REQUEST_OPENERS})\b"
     rf"|^{LEAD_IN}(?:sing|hum|rap|dance|laugh|whisper|bow|stretch|play|"
-    rf"recite|tell|perform)\b"
+    rf"recite|tell|perform|use)\b"
     rf"|^{LEAD_IN}\w+\s+(?:me|us)\b",
+    re.I,
+)
+
+# Back-references to whatever she just did — a repeat, never a topic.
+_ANAPHORIC = re.compile(
+    r"\s*(?:it|that|this|the same(?: one| thing)?|one more time|"
+    r"again|once more|another(?: one)?)(?:\s+(?:again|one more time|once more))?\s*",
     re.I,
 )
 
@@ -88,6 +100,10 @@ def detect_expression(text: str) -> tuple[str, str | None] | None:
                     r"anything|song|tune|music|poem|rap|for (?:me|us)|please)\b",
                     " ", subject, flags=re.I,
                 ).strip(" .,!?-")
+                # "sing it again" is a request to REPEAT, not a topic. Left
+                # alone she sang about the words "it again".
+                if _ANAPHORIC.fullmatch(cleaned):
+                    cleaned = ""
                 subject = cleaned if len(cleaned) > 2 else None
             return behavior, subject
     return None

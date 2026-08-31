@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import shutil
 import sys
@@ -12,7 +13,7 @@ from typing import Any
 
 from .config import Settings
 from .health.doctor import run_doctor
-from .logging_setup import configure_logging
+from .logging_setup import configure_logging, trim_oversized_logs
 
 
 def _json(value: Any) -> None:
@@ -60,6 +61,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0 if result["ok"] else 2
 
 
+def cmd_truth(args: argparse.Namespace) -> int:
+    """Is the running system the designed system? Non-zero on drift."""
+    from .health.runtime_truth import verify_runtime
+
+    report = asyncio.run(verify_runtime(_settings(args)))
+    _json(report)
+    return 0 if report["ok"] else 2
+
+
 def cmd_service(args: argparse.Namespace) -> int:
     settings = _settings(args)
     name = args.name
@@ -87,6 +97,22 @@ def cmd_service(args: argparse.Namespace) -> int:
         from .autonomy.service import run
     else:
         raise ValueError(f"Unknown service: {name}")
+    # Record what this service is ACTUALLY running, now that its imports are
+    # resolved, and exit if that source changes underneath it. A healthy
+    # service running yesterday's code passes every liveness check ever
+    # written and makes each new fix look like a fix that did not work.
+    from .codestamp import watch
+
+    watch(
+        settings.runtime_dir,
+        name,
+        interval=float(settings.get("dev.code_watch_seconds", 3.0)),
+        settle=float(settings.get("dev.code_settle_seconds", 6.0)),
+        exit_on_change=bool(settings.get("dev.exit_on_stale_code", True)),
+        # Her Slot 0 text, model expectations and thresholds are all YAML.
+        # A config edit is a code edit as far as a running service is concerned.
+        config=getattr(args, "config", None),
+    )
     run(settings)
     return 0
 
@@ -248,6 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("doctor", help="Check local runtime prerequisites")
     p.set_defaults(func=cmd_doctor)
 
+    p = sub.add_parser(
+        "truth",
+        help="Compare the RUNNING system against the declared configuration",
+    )
+    p.set_defaults(func=cmd_truth)
+
     p = sub.add_parser("service", help="Run one Kendra service")
     p.add_argument("name", choices=["reflex", "body", "brain", "identity", "research", "vision", "agent", "voice", "leds", "delivery", "autonomy"])
     p.set_defaults(func=cmd_service)
@@ -330,7 +362,24 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     settings = _settings(args)
-    configure_logging(str(settings.get("logging.level", "INFO")))
+    # Long-running services each own one bounded file; short CLI commands stay
+    # on stderr. Without this every service wrote unbounded into whatever the
+    # launcher happened to redirect, which is how logs/ reached 616 MB.
+    service_name = getattr(args, "name", None) if getattr(args, "func", None) is cmd_service else None
+    logs_dir = None
+    if service_name:
+        try:
+            logs_dir = settings.path("paths.logs_dir")
+        except Exception:
+            logs_dir = None
+    configure_logging(
+        str(settings.get("logging.level", "INFO")),
+        logs_dir=logs_dir,
+        name=f"service-{service_name}" if service_name else None,
+    )
+    if logs_dir is not None:
+        for rolled in trim_oversized_logs(logs_dir):
+            logging.getLogger(__name__).warning("Rolled an oversized log file: %s", rolled)
     try:
         code = int(args.func(args))
     except KeyboardInterrupt:

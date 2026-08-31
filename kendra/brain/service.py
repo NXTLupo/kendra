@@ -23,6 +23,20 @@ class BrainService:
         self.second_brain = SecondBrain(settings.path("brain.second_brain.dir"))
         self.server = UnixJsonServer(settings.socket_path("brain"), self.handle)
 
+    def _resident(self):
+        """What she knows without looking it up — built here, cached here.
+
+        The agent asks for it with the same call that fetches her memories,
+        so a turn pays one round trip rather than two, and nothing outside
+        this service ever opens the database.
+        """
+        cached = getattr(self, "_resident_ctx", None)
+        if cached is None:
+            from .resident import ResidentContext
+
+            cached = self._resident_ctx = ResidentContext(self.store)
+        return cached
+
     async def handle(self, method: str, params: dict[str, Any]) -> Any:
         if method == "health":
             return {"ok": True, **self.store.stats()}
@@ -32,7 +46,15 @@ class BrainService:
             self.store.event(str(params["event_type"]), dict(params.get("payload") or {}))
             return {"ok": True}
         if method == "dashboard_snapshot":
-            return self.store.dashboard_snapshot(limit=int(params.get("limit", 20)))
+            # The desktop's Live Conversation panel shows THIS session only.
+            # It used to show whatever was in the table, so a fresh launch
+            # opened onto yesterday's exchange as if it were still going.
+            from ..session import started_at
+
+            return self.store.dashboard_snapshot(
+                limit=int(params.get("limit", 20)),
+                since=started_at(self.settings.runtime_dir),
+            )
         if method == "remember":
             # Consolidated memories also land in the raw experience log, so
             # observations and learned facts reach the wiki compile step.
@@ -56,6 +78,8 @@ class BrainService:
                 include_system=bool(params.get("include_system", False)),
             )
             return [hit.as_dict() for hit in hits]
+        if method == "resident":
+            return {"text": self._resident().text(int(params.get("budget_chars", 900)))}
         if method == "context":
             context = self.store.context_for(
                 str(params["query"]),
@@ -85,13 +109,23 @@ class BrainService:
                     )
             except Exception:
                 LOG.debug("Wiki lookup skipped", exc_info=True)
+            # Rides along with the memories the agent already asked for.
+            try:
+                context["resident"] = self._resident().text(
+                    int(self.settings.get("brain.resident_budget_chars", 900))
+                )
+            except Exception:
+                LOG.debug("Resident context unavailable", exc_info=True)
             return context
         if method == "episode":
             return {"memory_id": self.store.add_episode(**params)}
         if method == "dream":
             return await self.consolidator.dream()
         if method == "recent_turns":
+            from ..session import started_at
+
             return self.store.recent_turns(
+                since=started_at(self.settings.runtime_dir),
                 limit=int(params.get("limit", 6)),
                 max_age_seconds=float(params.get("max_age_seconds", 900)),
             )

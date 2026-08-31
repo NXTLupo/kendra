@@ -8,10 +8,11 @@ from collections.abc import Callable
 from typing import Any
 
 from ..config import Settings
+from ..facebus import FaceBusPublisher
 from ..ipc import UnixJsonServer
 from ..protocol import Observation, ReflexState
 from .base import BodyDriver
-from .locomotion import DEFAULT_PROFILE, segment_plan
+from .locomotion import CYCLE_SECONDS, DEFAULT_PROFILE, segment_plan
 from .raspclaws import RaspClawsDriver
 from .sim import SimulationBodyDriver
 from .webots import WebotsBodyDriver
@@ -36,6 +37,10 @@ class BodyService:
         if settings.get("project.mode") == "hardware":
             settings.assert_hardware_gates()
         self.driver = build_driver(settings)
+        # Her legs, published as they move. The SAME call that will drive the
+        # RaspClaws servos drives the picture, so the virtual body and the
+        # real one can never disagree about what she just did.
+        self.face = FaceBusPublisher(settings)
         self.server = UnixJsonServer(settings.socket_path("body"), self.handle)
         self.capabilities = dict(settings.require("body.capabilities"))
         self.allowed_poses = {
@@ -88,11 +93,15 @@ class BodyService:
     def _clamp_speed(self, speed: float) -> float:
         return min(self.speed_max, max(self.speed_min, float(speed)))
 
-    async def _run_motion(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    async def _run_motion(
+        self, func: Callable[..., Any], *args: Any, gait: dict[str, Any] | None = None, **kwargs: Any
+    ) -> Any:
         async with self._motion_lock:
             started = time.monotonic()
             self.body_state = "moving"
             self._write_motion_state(moving=True, started=started)
+            if gait is not None:
+                self.face.publish("gait", **gait)
             try:
                 return await asyncio.wait_for(
                     asyncio.to_thread(func, *args, **kwargs), timeout=self.motion_timeout
@@ -106,6 +115,8 @@ class BodyService:
                 if self.body_state != "motion_fault":
                     self.body_state = "ready"
                 self._write_motion_state(moving=False)
+                if gait is not None:
+                    self.face.publish("gait_end")
 
     async def walk(self, direction: str, steps: int, speed: float) -> Any:
         if direction not in {"forward", "backward", "left", "right"}:
@@ -116,7 +127,24 @@ class BodyService:
         if state.rest_required:
             raise RuntimeError("Reflex requires a servo rest period")
         steps = min(self.max_steps, max(1, int(steps)))
-        return await self._run_motion(self.driver.walk, direction, steps, self._clamp_speed(speed))
+        clamped = self._clamp_speed(speed)
+        # Her real gait: a 4-phase tripod at 0.4 s per cycle, the vendor's
+        # own constant. The animation runs on that number, not on a guess, so
+        # what she looks like is what her legs will actually do.
+        return await self._run_motion(
+            self.driver.walk,
+            direction,
+            steps,
+            clamped,
+            gait={
+                "action": "walk",
+                "direction": direction,
+                "cycles": steps,
+                "cycle_seconds": CYCLE_SECONDS,
+                "seconds": round(steps * CYCLE_SECONDS, 3),
+                "speed": clamped,
+            },
+        )
 
     async def turn(self, degrees: float, speed: float) -> Any:
         state = self._reflex()
@@ -125,7 +153,22 @@ class BodyService:
         if state.rest_required:
             raise RuntimeError("Reflex requires a servo rest period")
         degrees = min(self.max_turn, max(-self.max_turn, float(degrees)))
-        return await self._run_motion(self.driver.turn, degrees, self._clamp_speed(speed))
+        clamped = self._clamp_speed(speed)
+        cycles = max(1, DEFAULT_PROFILE.cycles_for_angle(abs(degrees)))
+        return await self._run_motion(
+            self.driver.turn,
+            degrees,
+            clamped,
+            gait={
+                "action": "turn",
+                "direction": "left" if degrees < 0 else "right",
+                "degrees": round(float(degrees), 1),
+                "cycles": cycles,
+                "cycle_seconds": CYCLE_SECONDS,
+                "seconds": round(cycles * CYCLE_SECONDS, 3),
+                "speed": clamped,
+            },
+        )
 
     async def _await_rest(self, limit: float) -> bool:
         """Wait out the reflex rest window. Returns True if she may move."""
@@ -255,6 +298,14 @@ class BodyService:
             battery=state.battery,
             body_state=self.body_state,
             reflex_lock=state.stop_required or state.rest_required,
+            # A SERVO REST IS NOT AN EMERGENCY.
+            #
+            # `reflex_lock` deliberately includes the routine rest period her
+            # legs take after a few seconds of gait. The desktop app was
+            # drawing that lock as `startled` -- so every single time she
+            # walked, she finished the move bright red with a frightened face.
+            # A fault is a fault; needing a breather is not.
+            reflex_fault=state.stop_required or any((state.cliff or {}).values()),
             blocked_directions=state.blocked_directions,
             notes=state.faults,
         ).model_dump()

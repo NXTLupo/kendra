@@ -28,6 +28,22 @@ LOG_DIR="$ROOT/logs"
 LOG="$LOG_DIR/desktop-launcher.log"
 mkdir -p "$LOG_DIR"
 
+# Rotate before writing. Nothing rotated these files and they reached 616 MB
+# across the logs directory, which made a real error impossible to find. One
+# generation back is kept; anything older is the app's own rotated log under
+# logs/desktop/, which is the complete record.
+rotate_log() {
+  local file="$1" max="${2:-8388608}" size
+  [ -f "$file" ] || return 0
+  size="$(wc -c <"$file" 2>/dev/null | tr -d ' ')"
+  [ -n "$size" ] && [ "$size" -gt "$max" ] && mv -f "$file" "$file.1"
+  return 0
+}
+rotate_log "$LOG"
+for stale in "$LOG_DIR"/llm-server.log "$LOG_DIR"/vlm-server.log "$LOG_DIR"/asr-server.log; do
+  rotate_log "$stale"
+done
+
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 
 fail() {
@@ -68,12 +84,35 @@ log "root=$ROOT config=$CONFIG node=$(command -v node || echo missing) arch=$(un
 [ -x "$ROOT/.venv/bin/python" ] || fail "Missing Python environment (.venv). Run scripts/bootstrap_intel_macos.sh."
 command -v node >/dev/null 2>&1 || fail "Node.js is not installed. Run: brew install node@22"
 
+# Rebuild whenever her SOURCE is newer than what was built, not only when the
+# bundle is missing.
+#
+# This cost a whole evening. The app was started, then the renderer was edited
+# and rebuilt, and the running window went on showing the older bundle -- with
+# no error anywhere, because a stale bundle is a perfectly valid one. "I changed
+# the code and nothing changed" is the worst possible failure mode: it looks
+# exactly like a change that did not work.
+STALE=0
 if [ ! -d "$ROOT/dashboard/node_modules/electron" ] || [ ! -f "$ROOT/dashboard/dist/index.html" ]; then
-  log "Desktop bundle is missing or incomplete; running the refresher first."
+  STALE=1
+  log "Desktop bundle is missing or incomplete."
+else
+  NEWER="$(find "$ROOT/dashboard/src" "$ROOT/dashboard/app" \
+             -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.css' -o -name '*.html' \) \
+             -newer "$ROOT/dashboard/dist/index.html" 2>/dev/null | head -5)"
+  if [ -n "$NEWER" ]; then
+    STALE=1
+    log "Renderer source is newer than the built bundle; rebuilding. Changed:"
+    printf '  %s\n' $NEWER | tee -a "$LOG"
+  fi
+fi
+if [ "$STALE" = "1" ]; then
   if ! "$ROOT/scripts/refresh_kendra_desktop.sh" --no-restart >>"$LOG" 2>&1; then
     fail "The desktop app could not be rebuilt. See logs/desktop-launcher.log."
   fi
+  log "Desktop bundle rebuilt."
 fi
+log "Renderer bundle: $(grep -o 'assets/index-[A-Za-z0-9_-]*\.js' "$ROOT/dashboard/dist/index.html" 2>/dev/null | head -1)"
 
 LLAMA_SERVER="$ROOT/third_party/llama.cpp/build/bin/llama-server"
 [ -x "$LLAMA_SERVER" ] || fail "llama-server is not built. Run scripts/bootstrap_intel_macos.sh."
@@ -101,6 +140,37 @@ print("yes" if alive and len(alive) != len(list(services)) else "no")
 ' 2>/dev/null || echo no)"
 if [ "$NEEDS_RESET" = "yes" ]; then
   log "Clearing a partially running Kendra stack before launch."
+  "$ROOT/.venv/bin/python" -m kendra --config "$CONFIG" dev stop >>"$LOG" 2>&1 || true
+fi
+
+# A HEALTHY STACK IS NOT NECESSARILY A CURRENT ONE.
+#
+# `dev status` used to report only whether each service was alive, so a stack
+# up since before the last edit sailed through every check while running old
+# code. Ten services stayed nine hours behind the source, nothing errored, and
+# every change looked like it had simply failed to work.
+#
+# Each service now records exactly which of Kendra's source files it imported
+# and reports `code: current | stale | unknown`. Anything but `current` means
+# it cannot be trusted to be running what is on disk, so it is restarted. This
+# reads `dev status` rather than `kendra truth` deliberately: truth also asks
+# the model server about itself, and her stack must be able to come up
+# correctly before her brain is listening.
+NEEDS_FRESH="$("$ROOT/.venv/bin/python" -m kendra --config "$CONFIG" dev status 2>/dev/null \
+  | "$ROOT/.venv/bin/python" -c '
+import json, sys
+try:
+    services = (json.load(sys.stdin).get("services") or {}).items()
+except Exception:
+    print(""); raise SystemExit
+print(" ".join(sorted(
+    name for name, item in services
+    if item.get("alive") and item.get("code") not in (None, "current")
+)))
+' 2>/dev/null || true)"
+if [ -n "${NEEDS_FRESH// /}" ]; then
+  log "These services are not running the code on disk: $NEEDS_FRESH"
+  log "Restarting the stack so what runs is what was written."
   "$ROOT/.venv/bin/python" -m kendra --config "$CONFIG" dev stop >>"$LOG" 2>&1 || true
 fi
 

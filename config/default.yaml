@@ -9,7 +9,20 @@ project:
 paths:
   runtime_dir: ./runtime
   brain_db: ./data/kendra-brain.db
-  charter: ./charter/charter.md
+  # SLOT 0 — the identity kernel, byte-identical every turn.
+  #
+  # Two layers, deliberately. This is the small kernel that establishes who
+  # she IS and stays permanently resident; the richer identity document lives
+  # in her wiki as kendra-identity-* pages and is retrieved only when the
+  # conversation calls for it. On a 1.7B, burying her under identity prose
+  # every turn is what you are trading against.
+  #
+  # Measured A/B on her live model, N=8 (scripts/behaviour_probe.py):
+  #   full charter, 1462 tok -> 10/24   and it FABRICATED a llama.cpp version
+  #   kernel,        490 tok -> 19/24
+  # The charter is retained below as the canonical source document.
+  charter: ./charter/kernel.md
+  charter_full: ./charter/charter.md
   photos_dir: ./photos
   outbox_dir: ./outbox
   logs_dir: ./logs
@@ -88,6 +101,27 @@ reflex:
 llm:
   base_url: http://127.0.0.1:17800/v1
   model: qwen3-1.7b-q4_k_m
+  # DECLARED RUNTIME. `kendra truth` compares these against what is actually
+  # loaded and exits non-zero on drift; every service warns at boot.
+  #
+  # This exists because her brain served the merged fine-tune with activation
+  # steering at scale 2.0 for two days while every health check passed. Ports
+  # answering is liveness, not truth.
+  expect:
+    # Any of these substrings may appear in the loaded model path.
+    model_path_contains:
+    - qwen3-kendra-v1
+    - qwen3-1.7b
+    # Activation steering ships OFF: measured, it added nothing over her
+    # fine-tune and cost reasoning (docs/CONSCIOUSNESS_VECTOR.md). Set true
+    # only for a deliberate experiment.
+    allow_control_vector: false
+    # Set to the adapter filename to require base + LoRA instead of the merged
+    # model. Left empty deliberately: on this Intel iMac a runtime LoRA
+    # disables llama.cpp's CPU_REPACK path for every adapted tensor and
+    # measured far slower generation, and latency is felt presence. Revisit
+    # with a measurement, not an assumption.
+    require_lora: ""
   # The interactive model is identical on Intel macOS and Raspberry Pi.
   # 1.7B replaced 0.6B on 2026-08-17: measured A/B showed 0.6B cannot hold
   # coherent multi-turn dialogue (docs/QWEN_VOICE_OPTIMIZATION.md).
@@ -136,12 +170,32 @@ brain:
     provider: qwen3_onnx
     dimensions: 1024
     model_path: ./models/embeddings/qwen3-embedding-0.6b
+    # Providers this profile accepts. `kendra truth` flags anything else.
+    # Measured 2026-08-22: swapping hashing -> qwen3 moved recall@4 from 7/12
+    # to 7/12 (MRR 0.542 -> 0.583) on her real corpus, so this is a
+    # correctness-of-description issue, not a quality lever.
+    expect_provider:
+    - qwen3_onnx
+    - onnx_minilm
     # rollback: provider onnx_minilm + dimensions 384 + all-MiniLM-L6-v2
   retrieval_limit: 12
   context_character_budget: 7000
   # 2 memories / 600 chars starved her: asked what music he likes, the one
   # slot that mattered competed with a stray wiki line and she answered
   # generically three times in a row.
+  # WHAT SHE KNOWS WITHOUT LOOKING IT UP.
+  #
+  # Her identity, the people she knows, and what has happened today are
+  # RESIDENT: present on every turn, never searched for. Everything else is
+  # retrieved, which is right for a small model with a small context — but
+  # retrieval here is lexical, and those three are asked about in pure
+  # stop-words. Measured on her real brain, "who am I", "do you know me" and
+  # "who are you" each retrieved ZERO memories while the answers sat in her
+  # slot-store; she invented a wife called Emily and a meeting in a park.
+  #
+  # ~340 characters, about eighty tokens, paid on every turn. Prefill is the
+  # felt latency of her whole voice path, so this stays small on purpose.
+  resident_budget_chars: 900
   live_retrieval_limit: 4
   live_context_character_budget: 1200
   automatic_consolidation: true
@@ -405,6 +459,22 @@ autonomy:
   mission_cooldown_seconds: 900
 dev:
   startup_timeout_seconds: 8.0
+  # NO SERVICE MAY GO ON RUNNING CODE THAT NO LONGER EXISTS.
+  #
+  # Each service records the exact set of Kendra source files it imported
+  # (kendra/codestamp.py) and exits with code 75 when any of them changes, so
+  # the supervisor restarts it on the current source. The desktop app
+  # supervises every 15 s; on the robot every systemd unit is Restart=always.
+  #
+  # This exists because the whole stack once ran the previous evening's code
+  # for a full day while every check reported perfect health -- ten services
+  # alive, every socket answering. Nothing errored; each fix simply had no
+  # effect, which is indistinguishable from a fix that did not work.
+  exit_on_stale_code: true
+  code_watch_seconds: 3.0
+  # An edit must stop changing for this long before she acts on it, so a
+  # half-written file does not restart her on every keystroke.
+  code_settle_seconds: 6.0
 leds:
   socket: leds.sock
   driver: disabled

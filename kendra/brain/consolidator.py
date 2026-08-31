@@ -76,28 +76,55 @@ class BrainConsolidator:
         self.llm = LlamaCppClient(settings)
         self.min_chars = int(settings.get("brain.consolidation_min_chars", 24))
 
-    @staticmethod
-    @staticmethod
-    def _third_person(content: str, subject: str | None) -> str:
-        """Rewrite a first-person memory so its subject is explicit."""
-        name = (subject or "Jonathan").strip() or "Jonathan"
-        if name.casefold() in {"kendra", "self", "me"}:
-            return content
-        text = str(content).strip()
-        replacements = (
-            (r"^i'?m\b", f"{name} is"),
-            (r"^i am\b", f"{name} is"),
-            (r"^i've\b", f"{name} has"),
-            (r"^i have\b", f"{name} has"),
-            (r"^i\b", name),
-            (r"^my\b", f"{name}'s"),
-            (r"^mine\b", f"{name}'s"),
-        )
-        for pattern, replacement in replacements:
-            new_text = re.sub(pattern, replacement, text, count=1, flags=re.I)
-            if new_text != text:
-                return new_text
-        return text
+    #: Kinds and provenances that are her OWN, not the speaker's.
+    _HER_OWN = {"kendra_opinion", "self_model", "insight", "architecture"}
+    #: A memory whose content is plainly about herself.
+    _ABOUT_SELF = re.compile(r"^\s*(?:kendra\b|i (?:think|feel|notice|saw|believe|used to)\b)", re.I)
+    #: A sentence is about a person only if it refers to one.
+    _FIRST_PERSON = re.compile(r"\b(?:i|i'?m|i'?ve|i'?ll|me|my|mine|myself)\b", re.I)
+
+    @classmethod
+    def _subject_for(cls, item: Any) -> str | None:
+        """Who this memory is ABOUT, recorded as data.
+
+        Replaces ``_third_person()``, which rewrote the sentence instead. That
+        rewrite substituted only the leading pronoun and never touched "you",
+        "my" or "mine", so it produced rows like "Jonathan work for a diner, I
+        don't work for you" — two referents in one sentence, which no 1.7B can
+        resolve. 15% of her durable memories were corrupted that way.
+
+        Storing the subject separately means the words she was actually told
+        survive intact, and ``AgentRuntime._attribute`` states who they are
+        about when they are read back. Nothing is rewritten, so nothing can be
+        mangled.
+        """
+        stated = str(getattr(item, "subject", "") or "").strip()
+        if stated:
+            # Normalise the two names that matter; anything else is a third
+            # party and is kept as given.
+            folded = stated.casefold()
+            if folded in {"kendra", "self", "me", "myself"}:
+                return "Kendra"
+            if folded in {"jonathan", "user", "him", "he"}:
+                return "Jonathan"
+            return stated
+        kind = str(getattr(item, "kind", "") or "")
+        content = str(getattr(item, "content", "") or "")
+        if kind == "observation":
+            return None  # a sight is about the room; she is only the observer
+        if kind in cls._HER_OWN or cls._ABOUT_SELF.match(content):
+            return "Kendra"
+        if (
+            str(getattr(item, "provenance", "") or "") == "user_stated"
+            and cls._FIRST_PERSON.search(content)
+        ):
+            # He is the subject only when the sentence is actually about him.
+            # "Who is the current president" is something he SAID, not a fact
+            # about him; attributing it would be a small lie told on every
+            # retrieval.
+            return "Jonathan"
+        # Facts about the world, researched results and sights have no person.
+        return None
 
     @staticmethod
     def _quote_supported(quote: str | None, user_text: str) -> bool:
@@ -232,13 +259,23 @@ KENDRA RESPONSE FOR CONTEXT ONLY; DO NOT TREAT AS EVIDENCE:
             else:
                 rejected.append(f"invalid_turn_provenance:{item.provenance}")
                 continue
-            # PERSPECTIVE. A memory is read back inside HER prompt, so a
-            # first-person sentence becomes ambiguous: "I'm actually fifty
-            # five years old" reads as Kendra's own age, and she answered
-            # "you are 38". Facts about a person are stored naming that
-            # person, whoever they are.
-            if provenance == "user_stated":
-                item.content = self._third_person(item.content, item.subject)
+            # PERSPECTIVE, recorded rather than rewritten.
+            #
+            # A memory is read back inside HER prompt, so "I'm actually fifty
+            # five years old" is ambiguous: whose age? The old answer was to
+            # rewrite the sentence — substitute the leading pronoun for a name
+            # — and it was the wrong answer. It only ever touched the FIRST
+            # pronoun and never "you", "my" or "mine", so it produced rows like
+            # "Jonathan work for a diner, I don't work for you" and
+            # "Jonathan think it's your environment that is important, not
+            # mine". 15% of her durable memories were corrupted this way, and
+            # the guard added to catch them threw away real facts instead,
+            # because most of how a person talks about himself contains "I".
+            #
+            # The subject is now stored as DATA, in its own column, and
+            # `AgentRuntime._attribute` states it when the memory is read.
+            # Nothing rewrites her words, so nothing can mangle them.
+            item.subject = self._subject_for(item)
 
             memory_id = self.store.remember(
                 kind=item.kind,
@@ -451,7 +488,7 @@ RETRIEVED SOURCES:
         )
         prompt = f"""Compile Kendra's raw experience log into wiki pages. Return JSON only:
 {{"pages": [{{"slug": "kebab-case-topic", "title": "Topic", "facts": ["..."], "links": ["other-slug"]}}]}}
-Rules: 1 to 4 pages. A fact is one short standalone declarative sentence naming people explicitly (Jonathan, Kendra — never a bare pronoun). Questions and speculation are not facts. Never invent anything absent from the log. If the log shows Kendra forming an opinion, feeling, or preference, include a page with slug "kendra-self" whose facts each start with "Kendra".
+Rules: at most 3 pages and at most 6 facts per page — a longer answer gets cut off mid-sentence and the whole batch is wasted. A fact is one short standalone declarative sentence naming people explicitly (Jonathan, Kendra — never a bare pronoun). Questions and speculation are not facts. Never invent anything absent from the log. If the log shows Kendra forming an opinion, feeling, or preference, include a page with slug "kendra-self" whose facts each start with "Kendra".
 
 RAW LOG:
 {listing}"""
@@ -484,13 +521,35 @@ RAW LOG:
                     "required": ["pages"],
                 },
                 temperature=0.0,
-                max_tokens=600,
+                max_tokens=900,
                 id_slot=1,
             )
-            parsed = json.loads(raw)
         except Exception as exc:
-            LOG.warning("Wiki compile skipped: %s", exc)
+            # The model server never answered. The batch was not seen, so the
+            # cursor must NOT move — try again in the next lull.
+            LOG.warning("Wiki compile unavailable: %s", exc)
             return {"reason": f"compile_unavailable:{type(exc).__name__}"}
+
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            parsed = _salvage_pages(raw)
+            if parsed is None:
+                # She ANSWERED, just unusably. Skipping the batch is not
+                # optional: the same entries produce the same bad answer
+                # every time, and that loop ran her only LLM every idle
+                # window for half an hour while `pending` climbed 726 -> 748.
+                # Live turns queued behind it and she appeared to choke.
+                LOG.warning("Wiki compile: unusable answer, skipping batch (%s)", exc)
+                sb.advance(cursor)
+                self.store.event(
+                    "wiki_compile", {"entries": len(entries), "pages": [], "skipped": True},
+                )
+                return {"reason": "unusable_answer", "entries": len(entries), "skipped": True}
+            LOG.info(
+                "Wiki compile: recovered %d page(s) from a truncated answer",
+                len(parsed.get("pages", [])),
+            )
         written = []
         for page in list(parsed.get("pages", []))[:4]:
             facts = [str(f) for f in page.get("facts", []) if str(f).strip()][:12]
@@ -508,3 +567,23 @@ RAW LOG:
         sb.advance(cursor)
         self.store.event("wiki_compile", {"entries": len(entries), "pages": written})
         return {"entries": len(entries), "pages": written}
+
+
+def _salvage_pages(raw: str) -> dict[str, Any] | None:
+    """Recover the whole pages from a truncated JSON answer.
+
+    `max_tokens` cuts the model off mid-string, and json.loads then rejects
+    the entire response for the sake of one incomplete trailing page.
+    Everything before the cut is usually perfectly good, so decode page
+    objects individually and keep the ones that closed properly.
+    """
+    decoder = json.JSONDecoder()
+    pages: list[dict[str, Any]] = []
+    for match in re.finditer(r'\{\s*"slug"', raw):
+        try:
+            page, _ = decoder.raw_decode(raw[match.start():])
+        except ValueError:
+            continue  # this is the page that got cut off
+        if isinstance(page, dict) and page.get("slug") and page.get("facts"):
+            pages.append(page)
+    return {"pages": pages} if pages else None

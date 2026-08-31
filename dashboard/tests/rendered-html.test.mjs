@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 test("builds a self-contained Kendra desktop renderer", async () => {
@@ -15,12 +15,12 @@ test("builds a self-contained Kendra desktop renderer", async () => {
 });
 
 test("uses sandboxed native IPC with no dashboard HTTP API", async () => {
-  const [page, css, main, preload, avatar] = await Promise.all([
+  const [page, css, main, preload, sprite] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../electron/main.mjs", import.meta.url), "utf8"),
     readFile(new URL("../electron/preload.cjs", import.meta.url), "utf8"),
-    stat(new URL("../public/kendra-reference.png", import.meta.url)),
+    readFile(new URL("../src/kendraSprite.ts", import.meta.url), "utf8"),
   ]);
   assert.match(page, /window\.kendra/);
   assert.doesNotMatch(page, /fetch\(|\/api\/|8766/);
@@ -28,12 +28,24 @@ test("uses sandboxed native IPC with no dashboard HTTP API", async () => {
   assert.match(page, /Use my webcam/);
   assert.match(page, /Retrieve memories now/);
   assert.match(page, /config\/webots\.yaml/);
-  assert.match(page, /kendra-reference\.png/);
+  assert.match(page, /<KendraBody/);
   assert.match(main, /dashboard-bridge/);
   assert.match(main, /contextIsolation: true/);
   assert.match(main, /sandbox: true/);
   assert.match(preload, /contextBridge\.exposeInMainWorld/);
+  // removeMenu() takes Electron's default Cmd+R accelerator with it. Without
+  // an explicit binding the renderer can never pick up new code: one sat on
+  // a four-hour-old bundle through a dozen rebuilds and looked dead.
+  assert.match(main, /before-input-event/);
+  assert.match(main, /reloadIgnoringCache/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
   assert.match(css, /@keyframes companion-breathe/);
-  assert.ok(avatar.size > 100_000);
+  // She floats free. The old portrait was an opaque oval with overflow:hidden,
+  // which cropped every raised limb at the frame edge.
+  const portrait = /\.kendra-portrait \{([^}]*)\}/.exec(css)?.[1] ?? "";
+  assert.match(portrait, /overflow: visible/);
+  assert.doesNotMatch(portrait, /background:\s*#|border-radius:\s*[1-9]|overflow:\s*hidden/);
+  // She is drawn, not modelled. Nothing is fetched before she appears, so
+  // there is no model file to assert the existence of — only her code.
+  assert.match(sprite, /class KendraSprite/);
 });

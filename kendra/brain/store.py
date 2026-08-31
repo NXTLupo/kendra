@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from collections.abc import Iterable
@@ -21,6 +22,9 @@ from .embeddings import (
     SentenceTransformerEmbeddingProvider,
     cosine_similarity,
 )
+
+LOG = logging.getLogger(__name__)
+
 
 # Words that carry no subject matter: pronouns, function words, fillers and
 # bare numerals. Overlap on these means two sentences look alike, not that
@@ -57,6 +61,87 @@ def now_iso() -> str:
 
 def _blob(vector: np.ndarray) -> bytes:
     return np.asarray(vector, dtype=np.float32).tobytes()
+
+
+# Her idle wondering, stored as an opinion. 46 rows in the live brain read
+# "I found myself wondering: <a question>". They are things she has NOT been
+# told, and they rank near the top of any search whose wording they echo.
+_OWN_QUESTION = re.compile(
+    r"^\s*(?:i (?:found myself|keep|was|am) wonder|i wonder\b|i'?m curious\b|"
+    r"(?:open )?question:)",
+    re.I,
+)
+
+
+def _is_own_question(content: str) -> bool:
+    """A question she asked herself is never evidence about anyone."""
+    text = (content or "").strip()
+    if not text:
+        return True
+    if _OWN_QUESTION.match(text):
+        return True
+    # A bare question with no statement in it: nothing was learned here.
+    return text.endswith("?") and "." not in text.rstrip("?")
+
+
+# ADMISSION CONTROL. What must never become a memory.
+#
+# Her corpus accumulated a VLM refusal stored as something she saw ("I saw: I
+# am sorry, but I cannot generate a story based on the image"), a fragment of
+# her own system prompt stored as a thing he said, ASR mash, and the same
+# sentence three times over. Every one of those is later retrieved and read
+# back into her prompt as fact.
+#
+# Cheaper to refuse at the door than to repair afterwards -- and repairing
+# afterwards is what produced the over-broad cleanup that once retired 1,539
+# records.
+_MODEL_REFUSAL = re.compile(
+    r"\b(?:i'?m sorry,? but|i (?:cannot|can'?t) (?:generate|provide|assist|help|see|create)"
+    r"|as an? (?:ai|assistant|language model)|i am unable to|i don'?t have (?:the )?ability)\b",
+    re.I,
+)
+# Text lifted out of her own instructions rather than out of the world.
+_INSTRUCTION_LEAK = re.compile(
+    r"\b(?:never repeat|do not output|reply in plain text|one or two short spoken"
+    r"|no emoji|no markdown|stage directions|your reply|answer in one)\b",
+    re.I,
+)
+
+
+def _admissible(kind: str, content: str, provenance: str) -> str | None:
+    """Why this must not be stored, or None when it may be.
+
+    ``system`` provenance is exempt: those are her architecture and build
+    facts, written deliberately by a script, and they legitimately speak in
+    the first person about herself.
+    """
+    text = (content or "").strip()
+    if provenance == "system":
+        return None
+    if len(text) < 12:
+        return "too short to mean anything later"
+    if _MODEL_REFUSAL.search(text):
+        return "a model refusal is not an experience"
+    if _INSTRUCTION_LEAK.search(text):
+        return "her own instructions are not something she was told"
+    if kind != "episode" and _is_own_question(text):
+        return "her own unanswered question is not evidence about anyone"
+    # Mostly non-words: ASR mash like "A Can you described as me, okay".
+    words = re.findall(r"[A-Za-z']{2,}", text)
+    if len(words) < 3:
+        return "not enough real words to be a fact"
+    return None
+
+
+def _shape(content: str) -> str:
+    """A duplicate-detection key: content words, order-independent.
+
+    Deliberately coarse. "Jonathan like early eighties heavy." appears three
+    times verbatim, and near-identical wonderings differ only by a trailing
+    clause; both must collapse to one slot in a four-slot context.
+    """
+    words = sorted(_content_words(content))[:12]
+    return " ".join(words)
 
 
 def _vector(blob: bytes | None, dimensions: int | None) -> np.ndarray | None:
@@ -181,6 +266,28 @@ class BrainStore:
         content = content.strip()
         if not content:
             raise ValueError("Memory content cannot be empty")
+        # Refuse by SKIPPING, never by raising.
+        #
+        # There are seventeen call sites across her services, several inside
+        # live turns. A new exception thrown through those would trade a bad
+        # memory for a dead reply, which is a far worse failure -- and it is
+        # the shape of half the defects already in this repository. Callers
+        # that need the id get 0 and can ignore it.
+        refusal = _admissible(kind, content, provenance)
+        if refusal is not None:
+            LOG.info("Refused a memory (%s): %r", refusal, content[:70])
+            return 0
+        # Never the same thing twice. "Jonathan likes early eighties heavy."
+        # was stored three separate times and then filled three of the four
+        # slots in a live prompt.
+        if provenance != "system":
+            duplicate = self.conn.execute(
+                "SELECT id FROM memories WHERE active=1 AND kind=? AND content=? LIMIT 1",
+                (kind, content),
+            ).fetchone()
+            if duplicate is not None:
+                LOG.debug("Memory already known: %r", content[:70])
+                return int(duplicate[0])
         allowed_provenance = {"observed", "user_stated", "researched", "inferred", "system"}
         if provenance not in allowed_provenance:
             raise ValueError(f"Unsupported provenance: {provenance}")
@@ -415,14 +522,88 @@ class BrainStore:
                 (session_id, now_iso(), context),
             )
 
-    def set_fact(self, subject: str, key: str, value: str) -> None:
-        """ELC slot-store: stable typed facts by exact lookup, not embeddings."""
+    def set_fact(self, subject: str, key: str, value: str) -> bool:
+        """Write one slot. Returns False if the key is not in the contract.
+
+        The slot store is the exact tier consulted before any embedding, so
+        what lives in it must be declared (kendra/brain/slots.py). Without
+        that, keys arrived freeform — "favorite music", "guitar teacher
+        focus" — and nothing stopped a model inventing a key that would then
+        be injected as fact forever.
+
+        Refusing rather than raising: a rejected slot is a fact that stays a
+        memory, which is the right home for it, and never a dead turn.
+        """
+        from .slots import normalise
+
+        canonical = normalise(key)
+        if not canonical:
+            LOG.info("Not a declared slot, keeping it as a memory instead: %r", key)
+            return False
         with self.conn:
             self.conn.execute(
                 "INSERT INTO facts(subject, key, value, updated_at) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT(subject, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (subject.strip().casefold(), key.strip().casefold(), value.strip(), now_iso()),
+                (subject.strip().casefold(), canonical, value.strip(), now_iso()),
             )
+        return True
+
+    def slots_for(self, subject: str, include_stale: bool = False) -> dict[str, dict[str, Any]]:
+        """Every current slot for one subject, newest write wins.
+
+        Stale slots are withheld by default. They are not deleted — the value
+        is still true history — but a preference stated once, months ago, is
+        not a fact about someone today, and asserting it confidently is worse
+        than not raising it.
+        """
+        from .slots import stale
+
+        rows = self.conn.execute(
+            "SELECT key, value, updated_at FROM facts WHERE subject=?",
+            (subject.strip().casefold(),),
+        ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            is_stale = stale(row["key"], row["updated_at"])
+            if is_stale and not include_stale:
+                continue
+            out[str(row["key"])] = {
+                "value": str(row["value"]),
+                "updated_at": str(row["updated_at"]),
+                "stale": is_stale,
+            }
+        return out
+
+    def slot_subjects(self) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT subject FROM facts ORDER BY subject"
+        ).fetchall()
+        return [str(row["subject"]) for row in rows]
+
+    def migrate_slot_keys(self) -> list[tuple[str, str]]:
+        """Fold pre-contract keys onto their canonical names."""
+        from .slots import SLOTS, normalise
+
+        moved: list[tuple[str, str]] = []
+        rows = self.conn.execute("SELECT subject, key, value, updated_at FROM facts").fetchall()
+        for row in rows:
+            key = str(row["key"])
+            if key in SLOTS:
+                continue
+            canonical = normalise(key)
+            with self.conn:
+                if canonical:
+                    self.conn.execute(
+                        "INSERT INTO facts(subject, key, value, updated_at) VALUES (?,?,?,?) "
+                        "ON CONFLICT(subject, key) DO UPDATE SET value=excluded.value, "
+                        "updated_at=excluded.updated_at",
+                        (row["subject"], canonical, row["value"], row["updated_at"]),
+                    )
+                    moved.append((key, canonical))
+                self.conn.execute(
+                    "DELETE FROM facts WHERE subject=? AND key=?", (row["subject"], key)
+                )
+        return moved
 
     def fact_lookup(self, query: str, limit: int = 4) -> list[dict[str, Any]]:
         """Exact-match tier consulted BEFORE semantic search: word-indexed
@@ -655,6 +836,7 @@ class BrainStore:
         exclude_kinds: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         excluded = {str(kind) for kind in (exclude_kinds or [])}
+        seen_shapes: set[str] = set()
         # Over-fetch when kinds will be dropped. Filtering AFTER the cut let
         # excluded kinds consume every slot: "How old am I?" returned four
         # conversation episodes, all of them filtered out, leaving her with
@@ -672,6 +854,22 @@ class BrainStore:
             # of answering. Live turns exclude them; the recall tool does not.
             if hit.kind in excluded:
                 continue
+            # Her own unanswered questions are not memories about him.
+            # Measured: asked "what kind of music do I like", three of her four
+            # context slots were filled with three near-identical copies of
+            # "I found myself wondering: What kind of music do you like?" --
+            # the question outranks the answer because it shares almost every
+            # word with it. One real fact survived the cut and she still
+            # replied "I don't know yet, let me look it up."
+            if _is_own_question(hit.content):
+                continue
+            # And never the same thing twice. "Jonathan like early eighties
+            # heavy." is stored three separate times; duplicates crowd out
+            # everything else in a four-slot context.
+            shape = _shape(hit.content)
+            if shape in seen_shapes:
+                continue
+            seen_shapes.add(shape)
             item = hit.as_dict()
             size = len(item["content"])
             if memories and used + size > character_budget:
@@ -694,7 +892,12 @@ class BrainStore:
             context["self_model"] = self.self_model()
         return context
 
-    def recent_turns(self, limit: int = 6, max_age_seconds: float = 900.0) -> list[dict[str, Any]]:
+    def recent_turns(
+        self,
+        limit: int = 6,
+        max_age_seconds: float = 900.0,
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Most recent conversation turns, oldest first, for live prompt history.
 
         Speech synthesis and dialogue coherence both depend on conditioning on
@@ -703,6 +906,11 @@ class BrainStore:
         """
         limit = max(1, min(int(limit), 24))
         cutoff = (datetime.now(UTC) - timedelta(seconds=float(max_age_seconds))).isoformat()
+        # A session boundary is a hard floor: whichever is later wins, so the
+        # transcript never reaches back past the moment this stack started.
+        # Her MEMORIES span sessions; the raw transcript deliberately does not.
+        if since and since > cutoff:
+            cutoff = since
         rows = self.conn.execute(
             """
             SELECT user_text, kendra_text FROM turns
@@ -717,14 +925,19 @@ class BrainStore:
             for row in reversed(rows)
         ]
 
-    def dashboard_snapshot(self, limit: int = 20) -> dict[str, Any]:
+    def dashboard_snapshot(self, limit: int = 20, since: str | None = None) -> dict[str, Any]:
         limit = max(1, min(int(limit), 100))
+        # Live Conversation means THIS conversation. Without the floor a fresh
+        # launch opened onto yesterday's exchange, which reads as her having
+        # been mid-sentence all night.
         turns = self.conn.execute(
             """
             SELECT id, session_id, user_text, kendra_text, created_at, metadata_json
-            FROM turns ORDER BY id DESC LIMIT ?
+            FROM turns
+            WHERE (? IS NULL OR created_at >= ?)
+            ORDER BY id DESC LIMIT ?
             """,
-            (limit,),
+            (since, since, limit),
         ).fetchall()
         events = self.conn.execute(
             """

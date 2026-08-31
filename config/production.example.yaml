@@ -97,3 +97,13 @@ autonomy:
 
 agent:
   allow_autonomy: false
+
+dev:
+  # OFF on the robot, deliberately.
+  #
+  # On the desktop, restarting a service the moment its source changes is
+  # exactly what you want. On a body with legs it is not: an unplanned reflex
+  # or body restart mid-motion is worse than running slightly old code, and
+  # her code does not change under her out there anyway -- updates arrive
+  # through the signed A/B slot mechanism, which restarts deliberately.
+  exit_on_stale_code: false

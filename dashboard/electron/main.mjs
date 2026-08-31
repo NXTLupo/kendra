@@ -50,7 +50,14 @@ function write(level, source, message) {
   } catch {
     // Never let logging failures break the app.
   }
-  process.stdout.write(`${line}\n`);
+  // Only problems are mirrored to stdout. The launcher appends our stdout to
+  // logs/desktop-launcher.log with no rotation, so echoing every INFO line
+  // there wrote the same bytes twice and grew that file to 194 MB. The
+  // rotated file above is the complete record; stdout is for the human who
+  // launched her and needs to see something go wrong.
+  if (level !== "INFO" || process.env.KENDRA_DESKTOP_STDOUT === "1") {
+    process.stdout.write(`${line}\n`);
+  }
 }
 
 function describe(value) {
@@ -89,6 +96,20 @@ let bridgeRestartTimer;
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 
+// Her live state, pushed to every open window. Events are dropped rather than
+// queued when no window exists: an animation cue that arrives late is worse
+// than one that never arrives, because it plays against the wrong audio.
+function broadcast(message) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    try {
+      window.webContents.send("kendra:event", message);
+    } catch {
+      // A window closing mid-send is normal.
+    }
+  }
+}
+
 function rejectPending(message) {
   for (const { reject, timer } of pending.values()) {
     clearTimeout(timer);
@@ -108,6 +129,15 @@ function startBridge() {
   lines.on("line", (line) => {
     try {
       const message = JSON.parse(line);
+      // Live state from her services -- listening, thinking, speaking. These
+      // arrive unbidden, which is the entire point: this used to fall through
+      // to `if (!item) return` and be discarded, so the only thing the
+      // renderer could ever learn about her was whatever it thought to ask
+      // for on a three-second timer.
+      if (message.event) {
+        broadcast(message);
+        return;
+      }
       const item = pending.get(message.id);
       if (!item) return;
       pending.delete(message.id);
@@ -161,6 +191,39 @@ async function waitForHealth(port, timeoutMs = 180_000) {
   throw new Error(`Local model on port ${port} did not become ready`);
 }
 
+// llama.cpp writes ALL of its per-request logging to stderr: slot assignment,
+// prompt-eval timings, cache hits. Piping that into console.error tagged every
+// routine inference line as an ERROR and buried the real ones -- 405 MB of
+// "errors" that were nothing of the kind. Model output now goes to its own
+// rotated file, and only lines that actually look like failures are promoted
+// into the app log.
+const MODEL_ROUTINE = /^(srv|slot|main|common|build|system|llama_|ggml_|print_info|load|init|got |request:|got exception)/i;
+
+function modelLogger(name) {
+  const file = path.join(logDir, `model-${name}.log`);
+  let stream;
+  try {
+    if (fs.existsSync(file) && fs.statSync(file).size > MAX_LOG_BYTES) {
+      fs.renameSync(file, `${file}.1`);
+    }
+    stream = fs.createWriteStream(file, { flags: "a" });
+  } catch (error) {
+    log.warn("model", `could not open ${file}: ${error.message}`);
+  }
+  return (chunk) => {
+    for (const text of String(chunk).split("\n").map((l) => l.trimEnd()).filter(Boolean)) {
+      try {
+        stream?.write(`${new Date().toISOString()} ${text}\n`);
+      } catch {
+        // Logging must never take a model down.
+      }
+      if (!MODEL_ROUTINE.test(text) && /\b(error|failed|cannot|unable|abort|assert)\b/i.test(text)) {
+        log.error("model", `${name}: ${text}`);
+      }
+    }
+  };
+}
+
 async function ensureModel(script, port) {
   if (await localHealth(port)) return;
   const child = spawn(path.join(projectRoot, "scripts", script), [], {
@@ -169,8 +232,9 @@ async function ensureModel(script, port) {
     stdio: ["ignore", "pipe", "pipe"],
   });
   ownedModels.push(child);
-  child.stdout.on("data", (chunk) => console.info(String(chunk).trimEnd()));
-  child.stderr.on("data", (chunk) => console.error(String(chunk).trimEnd()));
+  const sink = modelLogger(String(port));
+  child.stdout.on("data", sink);
+  child.stderr.on("data", sink);
   await waitForHealth(port);
 }
 
@@ -196,11 +260,50 @@ async function ensureServices() {
   // silently restart a perfectly healthy stack on every launch.
   const required = ["brain", "identity", "reflex", "body", "research", "vision", "leds", "delivery", "agent", "voice"];
   const services = status.services || {};
-  if (required.every((name) => services[name]?.alive)) return;
+  const missing = required.filter((name) => !services[name]?.alive);
+  if (missing.length === 0) return false;
+  log.warn("services", `restarting the stack; not alive: ${missing.join(", ")}`);
   if (Object.values(services).some((service) => service.alive)) {
     await runPython([...base, "stop"], 45_000);
   }
   await runPython([...base, "start", "--voice"], 90_000);
+  return true;
+}
+
+// SUPERVISION. Without this, "exit when your source changed" would be a way
+// to LOSE a service rather than refresh one.
+//
+// Her services stamp what they loaded at boot and exit when those exact files
+// change, so nothing can go on serving code that no longer exists. That is
+// only safe because something is watching to bring them back -- and until now
+// nothing was: `ensureServices` ran once, at launch, and never again.
+//
+// A full stop/start is deliberate. Restarting only the dead one would leave
+// the others on older code, which is the very split-brain this exists to
+// prevent; they come back together or not at all.
+let supervising = false;
+let restarts = [];
+const RESTART_WINDOW_MS = 120_000;
+const RESTART_LIMIT = 4;
+
+async function superviseServices() {
+  if (supervising || quitting) return;
+  supervising = true;
+  try {
+    const now = Date.now();
+    restarts = restarts.filter((at) => now - at < RESTART_WINDOW_MS);
+    if (restarts.length >= RESTART_LIMIT) {
+      // Something is genuinely broken, not merely stale. Restarting harder
+      // will not fix it and hides the real error.
+      log.error("services", `${restarts.length} restarts in two minutes — backing off. See logs/devstack/*.log`);
+      return;
+    }
+    if (await ensureServices()) restarts.push(Date.now());
+  } catch (error) {
+    log.error("services", "supervisor pass failed", error);
+  } finally {
+    supervising = false;
+  }
 }
 
 // First inference after a vision-model start compiles its compute graph and
@@ -299,6 +402,24 @@ function createWindow() {
     },
   });
   window.removeMenu();
+
+  // removeMenu() strips the application menu, and Electron's default Cmd+R
+  // accelerator lives IN that menu — so reloading was silently impossible.
+  // One renderer sat on a four-hour-old bundle through a dozen rebuilds,
+  // looking dead, because there was no way to pick up new code short of
+  // quitting the app. Bind it to the window directly, which survives
+  // removeMenu() and needs no global shortcut.
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const chord = input.meta || input.control;
+    if (chord && input.key.toLowerCase() === "r") {
+      event.preventDefault();
+      log.info("renderer", input.shift ? "hard reload requested" : "reload requested");
+      if (input.shift) window.webContents.reloadIgnoringCache();
+      else window.webContents.reload();
+    }
+  });
+
   window.once("ready-to-show", () => window.show());
 
   // Renderer diagnostics. Without this, a React crash or a failed fetch inside
@@ -334,8 +455,45 @@ function createWindow() {
   window.webContents.on("will-navigate", (event, url) => {
     if (!url.startsWith("file:") && url !== rendererUrl) event.preventDefault();
   });
-  if (rendererUrl) window.loadURL(rendererUrl);
-  else window.loadFile(path.join(dashboardRoot, "dist", "index.html"));
+  // Say what is actually being loaded, every time.
+  //
+  // A stale bundle is a perfectly valid one: it renders, it logs no error, and
+  // it silently ignores every change made since it was built. An evening was
+  // lost to "I changed the code and the app shows no change" because nothing
+  // anywhere reported which build the window was running.
+  if (rendererUrl) {
+    log.info("renderer", `loading dev server ${rendererUrl}`);
+    window.loadURL(rendererUrl);
+  } else {
+    const indexPath = path.join(dashboardRoot, "dist", "index.html");
+    try {
+      const html = fs.readFileSync(indexPath, "utf8");
+      const bundle = /assets\/(index-[A-Za-z0-9_-]+\.js)/.exec(html)?.[1] ?? "unknown";
+      const builtAt = fs.statSync(indexPath).mtime;
+      log.info("renderer", `loading bundle ${bundle} built ${builtAt.toISOString()}`);
+      // And warn if her source has moved on since.
+      let newest = 0;
+      for (const dir of ["src", "app"]) {
+        const root = path.join(dashboardRoot, dir);
+        const walk = (d) => {
+          for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+            const full = path.join(d, entry.name);
+            if (entry.isDirectory()) walk(full);
+            else if (/\.(tsx?|css|html)$/.test(entry.name)) {
+              newest = Math.max(newest, fs.statSync(full).mtimeMs);
+            }
+          }
+        };
+        if (fs.existsSync(root)) walk(root);
+      }
+      if (newest > builtAt.getTime() + 1000) {
+        log.warn("renderer", `STALE BUNDLE: source is ${Math.round((newest - builtAt.getTime()) / 1000)}s newer than the build. Run scripts/refresh_kendra_desktop.sh`);
+      }
+    } catch (error) {
+      log.warn("renderer", `could not identify the bundle: ${error.message}`);
+    }
+    window.loadFile(indexPath);
+  }
 }
 
 app.setName("Kendra");
@@ -366,6 +524,8 @@ if (singleInstance) app.whenReady().then(() => {
     return bridgeRequest(String(method), params && typeof params === "object" ? params : {});
   });
   createWindow();
+  // Keep her stack alive and current for as long as the app is open.
+  setInterval(() => void superviseServices(), 15_000);
   ensureRuntime()
     .then(() => log.info("runtime", "local models and Kendra services are ready"))
     .catch((error) => log.error("runtime", "Kendra runtime startup failed", error));

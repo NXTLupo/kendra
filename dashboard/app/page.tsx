@@ -40,6 +40,7 @@ type Snapshot = {
   body: {
     body_state?: string;
     reflex_lock?: boolean;
+    reflex_fault?: boolean;
     front_cm?: number;
     battery?: { state?: string; voltage?: number };
     cliff?: Record<string, boolean>;
@@ -410,6 +411,13 @@ export default function Home() {
                   busy={busy}
                   latestReply={turns.length ? (turns[turns.length - 1]?.kendra_text ?? null) : null}
                   listening={Boolean(voiceReady) && !busy}
+                  // A fault, never a routine servo rest: `reflex_lock` is also
+                  // set while her legs take their normal breather after a walk,
+                  // and drawing that as alarm turned her red every time she moved.
+                  startled={Boolean(
+                    snapshot?.body?.reflex_fault ||
+                    Object.values(snapshot?.body?.cliff || {}).some(Boolean),
+                  )}
                 />
               </div>
               <span className="presence-shadow" />

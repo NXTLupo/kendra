@@ -12,7 +12,7 @@
     "desktop": "electron electron/main.mjs",
     "build": "vite build",
     "start": "electron electron/main.mjs",
-    "test": "node --test tests/rendered-html.test.mjs",
+    "test": "node --test 'tests/*.test.mjs'",
     "lint": "eslint app src electron vite.config.ts"
   },
   "dependencies": {

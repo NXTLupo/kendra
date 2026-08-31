@@ -39,9 +39,15 @@ voice:
   # The robot profile keeps this on.
   barge_in_monitor: false
   capture:
-    # Preferred mic by name substring. Used when connected; if unplugged,
-    # Kendra auto-probes the remaining inputs instead of going deaf.
-    device: AG06
+    # auto: probe every input and pick the one carrying a live signal.
+    #
+    # This was pinned to "AG06" -- Jonathan's guitar interface, which is only
+    # switched on when he is playing. Every other time it is absent, so she
+    # logged a device error on each start and fell through to probing. Pinning
+    # a device that is usually off is worse than not pinning one: it makes a
+    # normal start look like a fault. Pin a name here only for a microphone
+    # that is always connected.
+    device: auto
   wake:
     provider: vosk_keyword
     phrase: kendra

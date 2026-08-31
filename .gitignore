@@ -53,3 +53,9 @@ searxng/data/*
 # Tripo 3D assets (regenerate with scripts/tripo_pipeline.py; 129MB)
 dashboard/public/kendra3d/
 data/tripo/*.glb
+
+# The abandoned 3D attempt, kept locally as a record. 241 MB of GLB models
+# that four attempts never got working; the source is already in git history
+# (kendraStage.ts, commit 6a74b87) and the reasoning is in the elevation plan.
+# She is drawn now, not modelled.
+archive/

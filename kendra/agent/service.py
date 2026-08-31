@@ -27,6 +27,12 @@ class AgentService:
         raise KeyError(f"Unknown agent method: {method}")
 
     async def run(self) -> None:
+        # Say out loud, at every boot, whether the brain that answered is the
+        # brain that was designed. Her stack ran a configuration the repo
+        # explicitly rejects for two days because nothing ever asked.
+        from ..health.runtime_truth import warn_on_drift
+
+        await warn_on_drift(self.settings)
         await self.server.serve_forever()
 
 

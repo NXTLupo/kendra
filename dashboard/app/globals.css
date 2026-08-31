@@ -56,14 +56,17 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 
 .center-stage { min-height: 690px; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; background: radial-gradient(circle at 50% 33%, rgba(255,255,255,.96), rgba(239,231,223,.72) 47%, rgba(224,219,210,.38)); border: 1px solid rgba(255,255,255,.7); border-radius: 34px; box-shadow: 0 24px 70px rgba(87,73,59,.1); overflow: hidden; }
 .center-stage::before { content: ""; position: absolute; inset: 0; opacity: .22; background-image: radial-gradient(rgba(81,96,85,.22) .55px, transparent .55px); background-size: 13px 13px; mask-image: radial-gradient(circle, #000, transparent 65%); }
-.presence-orb { width: 300px; height: 350px; position: relative; margin: -25px 0 5px; display: grid; place-items: center; transition: transform .5s ease; animation: companion-breathe 5.8s ease-in-out infinite; }.presence-orb.thinking { transform: scale(1.025); }
-.halo { position: absolute; inset: 18px -5px; border: 1px solid rgba(92,157,165,.22); border-radius: 48%; animation: drift 8s ease-in-out infinite; }.halo-two { inset: 34px 11px; border-color: rgba(174,147,183,.24); animation-delay: -2.8s; animation-direction: reverse; }
-.kendra-portrait { width: 252px; height: 318px; position: relative; z-index: 3; overflow: hidden; border-radius: 46% 46% 39% 39% / 35% 35% 45% 45%; border: 5px solid rgba(255,255,255,.72); background: #9fd0cd; box-shadow: inset 0 0 25px rgba(34,84,88,.15), 0 22px 45px rgba(57,86,80,.19), 0 0 0 1px rgba(76,107,102,.1); animation: companion-tilt 9s ease-in-out infinite; }
-.kendra-portrait::after { content: ""; position: absolute; inset: 0; background: linear-gradient(125deg, rgba(255,255,255,.16), transparent 31%, transparent 72%, rgba(38,76,79,.09)); pointer-events: none; }
-.kendra-portrait img { width: 100%; height: 100%; object-fit: cover; object-position: 50% 49%; display: block; transform: scale(1.01); }
-.presence-shadow { position: absolute; z-index: 1; width: 205px; height: 24px; bottom: 1px; border-radius: 50%; background: rgba(73,80,69,.18); filter: blur(10px); animation: shadow-breathe 5.8s ease-in-out infinite; }
+.presence-orb { width: 300px; height: 350px; position: relative; margin: -25px 0 5px; display: grid; place-items: center; }
+/* No container animation: her body does its own breathing on the canvas, and
+   two independent motions on one element beat against each other. */
+.halo { position: absolute; inset: -14px -40px; border: 1px solid rgba(92,157,165,.22); border-radius: 48%; animation: drift 8s ease-in-out infinite; }.halo-two { inset: 6px -14px; border-color: rgba(174,147,183,.24); animation-delay: -2.8s; animation-direction: reverse; }
+/* She floats free: no oval, no border, no clipping. The canvas is bigger
+   than the space she occupies so a raised limb can leave her silhouette
+   instead of being cut off at a frame edge. */
+.kendra-portrait { width: 360px; height: 360px; position: relative; z-index: 3; overflow: visible; background: none; border: 0; border-radius: 0; box-shadow: none; }
+.presence-shadow { position: absolute; z-index: 1; width: 168px; height: 18px; bottom: 14px; border-radius: 50%; background: rgba(73,80,69,.13); filter: blur(13px); animation: shadow-breathe 5.8s ease-in-out infinite; }
 .thinking .halo-one { animation-duration: 2.3s; box-shadow: 0 0 50px rgba(90,176,184,.2); }.thinking .halo-two { animation-duration: 1.7s; }
-.listening .halo { border-color: rgba(73,175,187,.58); box-shadow: 0 0 34px rgba(75,181,193,.22); animation-duration: 1.15s; }.listening .kendra-portrait { box-shadow: 0 24px 48px rgba(57,86,80,.2), 0 0 0 7px rgba(91,187,197,.11); }
+.listening .halo { border-color: rgba(73,175,187,.58); box-shadow: 0 0 34px rgba(75,181,193,.22); animation-duration: 1.15s; }.listening .kendra-portrait { filter: drop-shadow(0 0 18px rgba(91,187,197,.34)); }
 @keyframes drift { 0%,100% { transform: rotate(-1.5deg) scale(1); } 50% { transform: rotate(2deg) scale(1.035); } }
 @keyframes companion-breathe { 0%,100% { translate: 0 0; } 50% { translate: 0 -8px; } }
 @keyframes companion-tilt { 0%,100% { transform: rotate(-.7deg); } 50% { transform: rotate(.8deg); } }
@@ -97,6 +100,6 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; } }
 
 /* Her living portrait: the 3D body fills the same frame the still image had. */
-.kendra-body { width: 100%; height: 100%; min-height: 220px; }
+.kendra-body { width: 100%; height: 100%; min-height: 300px; overflow: visible; }
 .kendra-body canvas { width: 100%; height: 100%; display: block; }
 .kendra-body canvas.kendra-body-failed { display: none; }

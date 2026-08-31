@@ -47,6 +47,9 @@ class Observation(BaseModel):
     people_in_view: int = 0
     body_state: str = "unknown"
     reflex_lock: bool = False
+    #: A real fault -- a stop or a cliff -- as opposed to a routine servo
+    #: rest, which `reflex_lock` also covers. Only a fault should alarm her.
+    reflex_fault: bool = False
     blocked_directions: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     # Simulated bodies report where they are; the hardware driver has no

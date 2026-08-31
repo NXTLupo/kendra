@@ -15,6 +15,7 @@ import numpy as np
 from ..brain.service import BrainClient
 from ..config import Settings
 from ..connectivity import assert_loopback_http_url
+from ..facebus import FaceBusPublisher
 from ..identity.service import IdentityClient
 from ..ipc import UnixJsonClient, UnixJsonServer
 
@@ -30,6 +31,8 @@ class VisionService:
 
     def __init__(self, settings: Settings):
         self.settings = settings
+        # Named `face_bus`, not `face`: in this file "face" means a human's.
+        self.face_bus = FaceBusPublisher(settings)
         self.server = UnixJsonServer(settings.socket_path("vision"), self.handle)
         self.photos_dir = settings.path("paths.photos_dir")
         self.photos_dir.mkdir(parents=True, exist_ok=True)
@@ -580,10 +583,27 @@ class VisionService:
             }
         raise KeyError(f"Unknown vision method: {method}")
 
+    # What her idle gaze asks. Long for the llama.cpp eye, which can only
+    # caption; short for the ONNX eye, which answers questions.
     STRUCTURED_LOOK = (
         "In 2-3 sentences: name the subjects present, what they are doing, the "
         "spatial layout, any visible text, and the overall mood of the scene."
     )
+    # Measured on this exact model (kendra/vision/moondream_onnx.py):
+    # free-form description 12.5 s and "invents detail -- avoid"; a short
+    # targeted question ~1 s and correct. Her ambient gaze was paying the
+    # slow, inventive one every few minutes.
+    #
+    # That is not just wasted CPU. Ambient checks that the room is quiet
+    # BEFORE it starts, but nothing can interrupt it once it has -- so every
+    # ambient look opened a window in which a real sight question queued
+    # behind it. A shorter look is a shorter window.
+    AMBIENT_LOOK = "What is in front of the camera?"
+
+    def _ambient_question(self) -> str:
+        if str(self.settings.get("vision.semantic_provider", "llamacpp")) == "moondream_onnx":
+            return self.AMBIENT_LOOK
+        return self.STRUCTURED_LOOK
 
     async def _ambient_tick(self) -> bool:
         """One ambient-vision decision: look only if the world moved and the
@@ -625,8 +645,12 @@ class VisionService:
             pass
         self._motion_pending = False
         self._last_ambient_at = now
+        # Nobody asked her to do this. Her face shows curiosity rather than
+        # the deliberate camera-focus of a "take a look" command -- two
+        # different things that had been collapsed into one picture.
+        self.face_bus.publish("curious")
         try:
-            result = await self.observe(True, self.STRUCTURED_LOOK)
+            result = await self.observe(True, self._ambient_question())
         except Exception:
             LOG.debug("Ambient look failed", exc_info=True)
             return False
@@ -968,6 +992,17 @@ class VisionService:
         """
         import base64 as _b64
 
+        # Her ONNX eye is a local model, not a server: it has its own load
+        # cost and its own warm(). This routine only ever warmed the llama.cpp
+        # endpoint, so after the eye was swapped nothing paid the load at boot
+        # and Jonathan paid 5.2 s of it mid-question instead.
+        eye = getattr(self, "eye", None)
+        if eye is not None and hasattr(eye, "warm"):
+            started = time.time()
+            await asyncio.to_thread(eye.warm)
+            LOG.info("Moondream eye warmed at startup in %.1fs", time.time() - started)
+            return
+
         cv2 = self._cv2()
         tiny = np.zeros((64, 64, 3), dtype="uint8")
         ok, buffer = cv2.imencode(".jpg", tiny)
@@ -997,6 +1032,19 @@ class VisionService:
             await asyncio.sleep(10)
 
     async def _warm_ping(self) -> None:
+        """Warm WHICHEVER eye she has.
+
+        This posted to ``{endpoint}/chat/completions`` -- the llama.cpp eye --
+        and nothing else. Her eye was later switched to Moondream's own ONNX
+        runtime, which has its own ``warm()`` that this never called, so the
+        warm keeper quietly raised "warm payload not prepared yet" on every
+        pass and the model loaded cold on Jonathan's turn instead. Measured
+        2026-08-23: 5.2 s of load in the middle of a question.
+        """
+        eye = getattr(self, "eye", None)
+        if eye is not None and hasattr(eye, "warm"):
+            await asyncio.to_thread(eye.warm)
+            return
         payload = getattr(self, "_warm_payload", None)
         endpoint = getattr(self, "_warm_endpoint", None)
         if not payload or not endpoint:

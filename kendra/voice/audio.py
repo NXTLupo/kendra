@@ -53,6 +53,11 @@ class LocalAudioCapture:
         self.silence_seconds = float(settings.get("voice.vad.silence_seconds", 0.8))
         self._device_lock = threading.Lock()
         self._device_ready = False
+        #: True when EVERY input device delivered pure silence. On macOS an
+        #: unauthorized microphone opens successfully and returns zeros, so
+        #: this is the difference between "nobody is talking" and "she cannot
+        #: hear at all" -- and only the second one needs saying out loud.
+        self.no_microphone = False
         # Diagnostics for the last capture, so callers can distinguish "heard
         # speech" from "timed out listening to silence" and logs can say why.
         self.last_capture_speech = False
@@ -132,7 +137,16 @@ class LocalAudioCapture:
                         "selected (voice.capture.device) or authorized."
                     )
                     self.device = None
+                    # SILENCE IS NOT AN ERROR ON macOS.
+                    #
+                    # A microphone the user has not authorized opens happily and
+                    # returns zeros forever, so total deafness looks exactly
+                    # like a quiet room -- and Kendra just sits there, which
+                    # reads as "she is dead" rather than "she cannot hear you".
+                    # Anything watching her needs to be told.
+                    self.no_microphone = True
                 else:
+                    self.no_microphone = False
                     mean, peak, index, name = best
                     self.device = index
                     LOG.info("Selected microphone [%d] %s (ambient RMS %.0f)", index, name, mean)
@@ -166,7 +180,14 @@ class LocalAudioCapture:
                         # above already rejects brief spikes, so let a room
                         # that is really this loud raise its own ceiling.
                         ceiling = max(550.0, floor * 1.2)
-                        threshold = float(np.clip(floor * 3.0, 120.0, ceiling))
+                        # Lower clamp 350, not 120. Calibrating during an
+                        # unusually quiet instant pinned this at 120, but the
+                        # room's real ambient runs 128-260, so silence never
+                        # registered: every capture ran to the 25 s cap and
+                        # she sat transcribing room noise. Speech on these
+                        # mics is RMS 2000-9000, so 350 keeps a 5x margin
+                        # under the quietest real speech.
+                        threshold = float(np.clip(floor * 3.0, 350.0, ceiling))
                         LOG.info(
                             "VAD threshold calibrated to %.0f (configured %.0f, quietest ambient %.0f of %s)",
                             threshold, self.vad.threshold_rms, floor,
@@ -323,6 +344,8 @@ class LocalAudioCapture:
             dtype="int16",
         )) as stream:
             overflow_blocks = 0
+            # The quietest block once she is talking IS the live noise floor.
+            trough = float("inf")
             while time.monotonic() < absolute_deadline:
                 data, _overflowed = stream.read(block)
                 if _overflowed:
@@ -333,6 +356,8 @@ class LocalAudioCapture:
                 pcm = np.frombuffer(raw, dtype=np.int16)
                 _, block_peak = _mean_rms(pcm, block=len(pcm) or 1)
                 peak = max(peak, block_peak)
+                if speech_started:
+                    trough = min(trough, block_peak)
                 speaking = self.vad.is_speech(pcm) and (
                     threshold_multiplier <= 1.0
                     or _mean_rms(pcm, block=len(pcm) or 1)[1]
@@ -371,6 +396,32 @@ class LocalAudioCapture:
                     break
                 else:
                     preroll.append(raw)
+
+        # Running to the hard cap means the VAD never saw silence, so the
+        # threshold is sitting under the noise floor. Left alone she repeats
+        # this every turn for the rest of the session — three 25 s captures
+        # in a row is what "her voice chat died" looked like. Lift the
+        # threshold above the floor actually measured during the utterance so
+        # she recovers on the next turn instead of needing a restart.
+        measured = trough if trough < float("inf") else self.vad.threshold_rms
+        # Only when silence NEVER registered. A cap-hit whose quietest block
+        # sat well under the threshold means the VAD was working fine and he
+        # simply talked for the whole window — raising the threshold there
+        # punishes him for a long sentence. That misfire took the threshold
+        # from 550 to 900 on a trough of 18 and left her unable to hear him
+        # at all (peak RMS 425 vs threshold 900).
+        never_quiet = measured >= self.vad.threshold_rms * 0.9
+        if speech_started and time.monotonic() >= absolute_deadline and never_quiet:
+            raised = float(np.clip(
+                max(self.vad.threshold_rms * 1.8, measured * 2.5),
+                self.vad.threshold_rms, 900.0,
+            ))
+            LOG.warning(
+                "Capture ran to the %.0fs cap with no silence (quietest block RMS "
+                "%.0f vs threshold %.0f) — raising the threshold to %.0f",
+                self.max_seconds, measured, self.vad.threshold_rms, raised,
+            )
+            self.vad.threshold_rms = raised
 
         if overflow_blocks:
             LOG.warning(

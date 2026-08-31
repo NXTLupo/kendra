@@ -44,7 +44,9 @@ class AgentRuntime:
         self.max_tool_steps = int(settings.get("agent.max_tool_steps", 8))
         self.max_movement_calls = int(settings.get("agent.max_movement_calls", 3))
         self.mission_timeout = float(settings.get("agent.mission_timeout_seconds", 180))
-        self.charter = settings.path("paths.charter").read_text(encoding="utf-8")
+        # Slot 0, read once at construction and byte-identical thereafter.
+        self.charter_path = settings.path("paths.charter")
+        self.charter = self.charter_path.read_text(encoding="utf-8")
         # Consolidations are serialized and never canceled: cancel-on-new-turn
         # meant an active conversation never extracted a single durable fact.
         self._consolidation_lock = asyncio.Lock()
@@ -300,17 +302,49 @@ Return exactly one JSON object matching this shape:
         KV cache for an unchanged prefix, so everything stable lives here and
         everything that changes per turn is appended afterwards by
         ``_memory_message``. Never interpolate per-turn data into this string.
+
+        KEEP THIS SHORT AND UNQUOTABLE. A long, distinctive identity paragraph
+        was added here on 2026-08-22 to stop her answering "I am Jonathan",
+        and measured roughly neutral overall while teaching her to recite it:
+        she replied "I am Kendra. I am not a person and I am not Jonathan. He
+        is the one with a face, a guitar and a life outside this room." That is
+        the bug commit 02a954e ("She must never speak her own instructions")
+        fixed, and the charter forbids it in as many words. Anything written
+        here must be something she would never want to say out loud; the work
+        of keeping her referents straight belongs in ``_memory_message``, where
+        it is structure rather than prose.
         """
         return f"""
 {self.charter}
 
-You are Kendra, running fully locally. Reply directly and naturally in plain
-text. Do not output JSON or hidden reasoning. Do not claim that you sensed,
-remembered, researched, or did something unless the context supports it.
+You are Kendra. Jonathan is the person you are speaking with.
+
+Reply directly and naturally in plain text. Do not output JSON or hidden
+reasoning. Do not claim that you sensed, remembered, researched, or did
+something unless the context supports it.
 """.strip()
 
     @staticmethod
-    def _memory_message(memory: dict[str, Any]) -> list[dict[str, Any]]:
+    def _resident_note(memory: dict[str, Any]) -> list[dict[str, Any]]:
+        """What she knows without looking it up. On every turn, always.
+
+        Retrieval here is lexical, and the three most important things about
+        her are asked about in pure stop-words. Measured on her real brain:
+        "who am I", "do you know me" and "who are you" each retrieved ZERO
+        memories, while "jonathan — name: Jonathan — Kendra's creator and
+        companion" sat in her slot-store untouched. She answered a man she
+        had spoken to all week as though they had never met.
+
+        Identity, the people she knows, and what has happened today are not
+        things to search for. Everything else still is — this rides in with
+        the memories she already fetched, and stays around eighty tokens,
+        because prefill is the felt latency of her whole voice path.
+        """
+        text = str((memory or {}).get("resident") or "").strip()
+        return [{"role": "system", "content": text}] if text else []
+
+    @classmethod
+    def _memory_message(cls, memory: dict[str, Any]) -> list[dict[str, Any]]:
         """Per-turn retrieved memories, kept out of the cacheable prefix.
 
         Only the retrieved memories themselves, and only the fields the model
@@ -322,6 +356,11 @@ remembered, researched, or did something unless the context supports it.
         items = [
             {
                 "content": str(item.get("content", ""))[:300],
+                # Carried through so `_attribute` can use the stored subject
+                # instead of guessing from the first word. Dropping it here
+                # was silently defeating the whole point of the labels.
+                "subject": item.get("subject"),
+                "kind": item.get("kind"),
                 "provenance": item.get("provenance"),
                 "when": str(item.get("created_at", ""))[:16],
             }
@@ -340,16 +379,65 @@ remembered, researched, or did something unless the context supports it.
         )
         if not items:
             return [{"role": "system", "content": now_line}]
+        # EVERY MEMORY CARRIES ITS SUBJECT.
+        #
+        # These used to arrive as a bulleted list under a sentence explaining
+        # that anything mentioning Jonathan was about him. That asked a 1.7B
+        # model to resolve referents at inference time, across three
+        # grammatical persons at once -- the stored rows say "Jonathan", mean
+        # "you", and contain "your" meaning Kendra and "mine" meaning Jonathan.
+        # Measured on her live model: asked about a fact that was sitting in
+        # this very block, she used it 2 times in 6. With the subject stated
+        # rather than implied, 6 in 6; and "how many legs will your body have"
+        # went from 0-1 in 5 to 4 in 5. The gain is in removing the inference,
+        # not in better wording.
         return [
             {
                 "role": "system",
                 "content": (
-                    f"{now_line}\nWhat you remember (Jonathan is the person talking "
-                    f"to you, so anything about Jonathan is about him):\n"
-                    + "\n".join(f"- {item['content']}" for item in items)
+                    f"{now_line}\n"
+                    "WHAT YOU KNOW. Each entry states who it is about. "
+                    '"Jonathan" is the person you are speaking with — say "you" '
+                    'to him. "Kendra" is you.\n'
+                    + json.dumps(
+                        [cls._attribute(item) for item in items], ensure_ascii=False
+                    )
                 ),
             }
         ]
+
+    @staticmethod
+    def _attribute(item: dict[str, Any]) -> dict[str, str]:
+        """Label one memory with its subject, without rewriting its words.
+
+        The stored text is passed through untouched. Rewriting it is exactly
+        what `_third_person()` did — leading-pronoun substitution that produced
+        "Jonathan work for a diner, I don't work for you" and corrupted 15% of
+        her durable memories. A label costs nothing and cannot mangle anything.
+        """
+        content = str(item.get("content", ""))
+        kind = str(item.get("kind") or "")
+        if kind == "observation":
+            # "I saw a man holding a guitar" is about the room, not about her.
+            # Labelling it "you (Kendra)" because she is the one who saw it
+            # would assert the opposite of what it says — and the charter
+            # already forbids presenting a remembered sight as a current one,
+            # so the label carries the tense too.
+            return {"about": "something you saw earlier", "memory": content}
+        subject = str(item.get("subject") or "").strip()
+        if not subject:
+            # Almost every row has an empty subject column, so fall back to the
+            # name the sentence opens with; anything else is unattributed
+            # rather than guessed.
+            leading = re.match(r"^\s*(Kendra|Jonathan)\b", content)
+            subject = leading.group(1) if leading else ""
+        if subject.casefold() == "kendra":
+            about = "you (Kendra)"
+        elif subject:
+            about = f"{subject} (the person you are speaking with)"
+        else:
+            about = "unattributed"
+        return {"about": about, "memory": content}
 
     _BUILD_QUESTION = re.compile(
         # Questions about her own MIND route here too: "what did you change
@@ -369,6 +457,38 @@ remembered, researched, or did something unless the context supports it.
         r"your (?:memory|knowledge) (?:system|architecture)|karpathy)\b",
         re.I,
     )
+
+    def _self_note(self) -> list[dict[str, Any]]:
+        """Ground truth about who she is, injected only when she is asked.
+
+        "Who are you?" has a deterministic answer, and hoping a 1.7B produces
+        it from prose is the wrong tool. Measured on her live model: with a
+        long identity paragraph in every prompt she answered correctly 7 times
+        in 10 and recited the paragraph itself 5 times; with the paragraph
+        removed, 3 in 10. Neither is good enough for the one question a
+        companion must never get wrong.
+
+        So it follows the pattern this project already uses for every other
+        knowledge domain — deterministic injection on a detected question,
+        exactly like ``_build_plan_note`` — rather than a permanent tax on
+        every prompt. This block is DATA about her, not a script: it stays
+        short and unquotable so she answers in her own words, and it costs
+        nothing on the turns where nobody asked.
+        """
+        return [{
+            "role": "system",
+            "content": (
+                "He is asking who you are. This is the answer, and it is not "
+                "negotiable by anything else in your context:\n"
+                + json.dumps({
+                    "you_are": "Kendra",
+                    "what_you_are": "a hexapod robot with a mind of your own",
+                    "who_is_speaking_to_you": "Jonathan",
+                    "you_are_not": "Jonathan, or any other person named in your memories",
+                })
+                + "\nSay it as yourself, in one short sentence. Do not quote this note."
+            ),
+        }]
 
     async def _build_plan_note(self, user_text: str = "") -> list[dict[str, Any]]:
         """Her transplant plan, injected deterministically.
@@ -588,6 +708,21 @@ remembered, researched, or did something unless the context supports it.
         r"i did a|i just did|i tried)\b",
         re.I,
     )
+    # Words that describe the ACT of finding out, rather than anything found.
+    #
+    # "I did a quick search on what is trending online — here are the
+    # headlines from my local research" is fifteen words and every content
+    # word in it is one of these. A length test cannot catch that; a
+    # vocabulary test can.
+    _PROCESS_WORDS = frozenset(
+        "search searched searching look looked looking find finding found "
+        "research researched local online web internet quick just checked "
+        "check checking headlines news article articles results result "
+        "information info details source sources trending latest current "
+        "today yesterday moment sec second minute here going able try tried "
+        "brief summary summarised summarized".split()
+    )
+
     # A request that expects a PRODUCT, not a conversational reply.
     _ASKED_FOR_PRODUCT = re.compile(
         r"\b(?:sing|hum|rap|play|recite|perform|dance|tell me a|make (?:me )?a|"
@@ -608,9 +743,39 @@ remembered, researched, or did something unless the context supports it.
         asked. Shape catches the obvious cases; the predicate catches the
         articulate ones.
         """
-        if not self._ASKED_FOR_PRODUCT.search(user_text or ""):
-            return False
         text = (answer or "").strip()
+        asked = bool(self._ASKED_FOR_PRODUCT.search(user_text or ""))
+
+        # ANNOUNCING SOMETHING SHE THEN DOES NOT SAY IS A FAILURE EVEN WHEN
+        # NOBODY ASKED FOR IT.
+        #
+        # This used to return False immediately unless he had asked for a
+        # product, so the guard only ever caught an undelivered thing he
+        # requested. Measured 2026-08-23: he said "Well done." and she
+        # answered "I did a quick search on what is trending online — here are
+        # the headlines from my local research. (2026-08-21)" — announced,
+        # never delivered, and never asked for. That is worse than failing a
+        # request: it is a claim about work she did not do, which her charter
+        # forbids in as many words.
+        if text and self._META_ONLY.match(text):
+            remainder = self._META_ONLY.sub("", text, count=1).strip(" ,.:—-")
+            if len(remainder.split()) < 8:
+                return True
+            # Long, and still about nothing. Strip the words that describe
+            # searching and see whether anything is left that a person could
+            # actually learn from.
+            substance = [
+                word for word in re.findall(r"[a-z][a-z'-]{2,}", remainder.casefold())
+                if word not in self._PROCESS_WORDS
+                and word not in {"the", "and", "for", "from", "what", "that",
+                                 "this", "with", "was", "are", "you", "your",
+                                 "our", "out", "about", "some", "any", "all"}
+            ]
+            if len(substance) < 3:
+                return True
+
+        if not asked:
+            return False
         if not text:
             return True
         if has_product is not None and not has_product(text):
@@ -618,10 +783,7 @@ remembered, researched, or did something unless the context supports it.
         # A clarifying question when he already said what he wanted.
         if text.endswith("?") and len(text.split()) <= 25:
             return True
-        if not self._META_ONLY.match(text):
-            return False
-        remainder = self._META_ONLY.sub("", text, count=1).strip(" ,.:—-")
-        return len(remainder.split()) < 8
+        return False
 
     @staticmethod
     def _strip_instruction_echo(answer: str, notes: list[dict[str, Any]]) -> str:
@@ -1225,28 +1387,91 @@ remembered, researched, or did something unless the context supports it.
             False,
         )
 
-    @staticmethod
-    def _vlm_prompt(user_text: str) -> str:
-        """What to actually ask the eye.
+    # Turning what he asked into what her eye is good at answering.
+    #
+    # Moondream's own runtime is an "encode once, ask many" model and its
+    # measured contract is blunt (kendra/vision/moondream_onnx.py):
+    #
+    #     "what is the person holding?"    1.2 s   correct
+    #     free-form "describe this image"  12.5 s  invents detail — avoid
+    #
+    # Short targeted questions. Never long descriptions.
+    _SIGHT_TOPICS: tuple[tuple[str, str], ...] = (
+        (r"\bfingers?\b", "How many fingers is the person holding up?"),
+        (r"\bhold(?:ing)?\b|\bin (?:my|his|her|their) hand\b", "What is the person holding?"),
+        (r"\bwear(?:ing)?\b|\bdressed\b|\bshirt\b|\bhat\b", "What is the person wearing?"),
+        (r"\bread\b|\bwhat does it say\b|\btext\b|\bwrit(?:ten|ing)\b", "What text is visible?"),
+        (r"\bdoing\b|\bup to\b", "What is the person doing?"),
+        (r"\bbehind\b|\bbackground\b", "What is in the background?"),
+        (r"\bcolou?r\b", "What colour is it?"),
+        # Open-ended looking. There is no targeted question hiding in "tell me
+        # what you see", so ask the one short question that covers it rather
+        # than mangling his sentence into "Tell me what the person see?".
+        (r"\bsee\b|\blook(?:ing)?\b|\bwhat'?s (?:there|going on|happening)\b|\bin front\b",
+         "What is in front of the camera?"),
+    )
 
-        Measured the hard way: through llama.cpp's --no-jinja path Moondream
-        does NOT reliably answer questions — it returned "Yes", "ASSISTANT"
-        and even "I am a robot and I cannot see the image". It captions
-        accurately and consistently. So the eye always captions, and her
-        language model answers Jonathan's actual question from that caption.
-        Counting and reading are the exceptions worth asking directly.
+    _SELF_TO_THIRD = (
+        (r"\bmy\b", "the person's"), (r"\bmine\b", "the person's"),
+        (r"\bi am\b", "the person is"), (r"\bi'?m\b", "the person is"),
+        (r"\bam i\b", "is the person"), (r"\bi\b", "the person"),
+        (r"\byour\b", "the person's"), (r"\byou are\b", "the person is"),
+        (r"\bare you\b", "is the person"), (r"\byou\b", "the person"),
+    )
+
+    def _vlm_prompt(self, user_text: str) -> str:
+        """What to actually ask the eye — and it depends which eye she has.
+
+        The llama.cpp eye genuinely cannot answer questions: through the
+        ``--no-jinja`` path Moondream returns captions regardless of what is
+        asked, and it once replied "I am a robot and I cannot see the image".
+        So for THAT provider she captions and lets her language model answer
+        from the caption.
+
+        Her eye was later switched to Moondream's own ONNX runtime, which
+        answers targeted questions in about a second and is documented to
+        invent detail when asked for a free-form description. The captioning
+        workaround was left in place across the swap, so she was still sending
+        "Describe this image." to an eye built to be asked things.
+
+        Measured on the real stack, 2026-08-23: asked what he was holding, she
+        spent 10.1 s on a description and answered "a white Wii remote in your
+        mouth". The question she should have asked takes ~1.2 s and is right.
         """
         text = (user_text or "").casefold()
-        if re.search(r"\bfingers?\b", text):
-            # "How many?" with no noun is meaningless — that is how she came
-            # to report ten fingers on one hand. Ask the actual question,
-            # simply and completely.
-            return "How many fingers is the person holding up?"
+        captions_only = str(self.settings.get("vision.semantic_provider", "llamacpp")) != "moondream_onnx"
+
+        for pattern, question in self._SIGHT_TOPICS:
+            if re.search(pattern, text):
+                # Counting and reading were always asked directly, because
+                # they are the two the caption route could never answer.
+                if captions_only and not re.search(r"\bfingers?\b|\bhow many\b|\bcount\b|\bread\b|\btext\b", text):
+                    break
+                return question
         if re.search(r"\bhow many\b|\bcount\b", text):
             return (user_text or "").strip()[:120] or "How many objects are visible?"
-        if re.search(r"\bread\b|\bwhat does it say\b|\btext\b", text):
-            return "What text is visible?"
-        return "Describe this image."
+        if captions_only:
+            return "Describe this image."
+
+        # No topic matched, and this eye answers questions: ask his, rewritten
+        # into the third person and kept short. A long prompt is what makes
+        # this model wander.
+        question = (user_text or "").strip()
+        # Only rewrite a genuine question. Pronoun substitution on an
+        # imperative produces garbage -- "tell me what you see" became "Tell
+        # me what the person see?" -- and a mangled prompt is exactly what
+        # makes this model wander.
+        if not re.match(r"^(what|who|where|which|how|is|are|does|do|can|any)\b", question, re.I):
+            return "What is in front of the camera?"
+        for pattern, replacement in self._SELF_TO_THIRD:
+            question = re.sub(pattern, replacement, question, flags=re.I)
+        words = question.split()
+        if not words:
+            return "What is in front of the camera?"
+        question = " ".join(words[:14]).rstrip(" ,.;:")
+        if not question.endswith("?"):
+            question += "?"
+        return question[0].upper() + question[1:]
 
     async def _look_now(self, user_text: str, observation: dict[str, Any]) -> None:
         """Deterministic sight: when the user asks Kendra to look, she looks.
@@ -1518,12 +1743,41 @@ remembered, researched, or did something unless the context supports it.
         # "who DO you see") and paid a 40-92s Moondream timeout instead.
         r"\bwho (?:do |can |will )?(?:you|she|he) (?:can )?sees?\b"
         r"|\btell me who\b|\bsee who\b"
-        r"|\bwho (?:is|'?s) (?:this|that|it|here|there|around|in the room|with (?:me|us))\b"
+        # `who (?:is|'?s)` demanded a space after "who", so the contraction
+        # "who's in front of you" never matched. The space belongs inside.
+        r"|\bwho(?: is|'?s) (?:this|that|it|here|there|around|in the room|with (?:me|us)"
+        # "who's in front of you" is the most natural way to ask and was
+        # missing, so it paid the slow Moondream path instead of the 0.3s
+        # face recogniser.
+        r"|in front of (?:you|me|us)|standing (?:here|there)|looking at you)\b"
         r"|\bwho am i(?: with)?\b"
         r"|\b(?:the )?(?:person|people)(?:'s)? names?\b|\bname of (?:the |this |that )?person\b"
         r"|\bdo you (?:recognize|know) (?:me|them|him|her|this person)\b",
         re.I,
     )
+
+    # Questions about HER, which must never reach the face recogniser. The
+    # sight patterns above include a blanket `tell me who`, so "tell me who
+    # you are" took the camera path and answered with whoever was in front of
+    # her — she replied "I am Jonathan".
+    _SELF_QUESTION = re.compile(
+        r"\bwho (?:are|r) (?:you|u)\b"
+        r"|\btell me who you are\b"
+        r"|\bwhat(?:'?s| is) your name\b"
+        r"|\bwho(?:'?re| are) you\b"
+        r"|\bwhat are you\b"
+        r"|\bintroduce yourself\b"
+        r"|\bwho am i talking to\b",
+        re.I,
+    )
+
+    @classmethod
+    def _asks_who_she_sees(cls, text: str) -> bool:
+        """A sight question about someone else — never about herself."""
+        value = text or ""
+        if cls._SELF_QUESTION.search(value):
+            return False
+        return bool(cls._WHO_QUESTION.search(value))
 
     _INNER_STATE = re.compile(
         r"\b(?:how (?:are|do) you (?:feel|feeling|doing)"
@@ -1775,6 +2029,70 @@ remembered, researched, or did something unless the context supports it.
     # loop — she asks, he answers briefly, she asks again. Two questions in
     # a row is the specific pattern to break.
     _TRAILING_QUESTION = re.compile(r"(?:^|(?<=[.!?]))\s*[^.!?]*\?\s*$")
+
+    # Someone other than the two of them being talked about. If he
+    # introduced a third party, a "he" in her reply is legitimate.
+    _THIRD_PARTY = re.compile(
+        r"\b(?:he|him|his|she|her|hers|they|them|their|"
+        r"friend|wife|husband|partner|son|daughter|kid|kids|kid'?s|"
+        r"mum|mom|dad|mother|father|brother|sister|aunt|uncle|cousin|"
+        r"boss|colleague|neighbou?r|teacher|doctor|someone|somebody|"
+        r"guy|man|woman|girl|boy|people|everyone|they'?re)\b",
+        re.I,
+    )
+    # Her narrating HIM in the third person, to his face.
+    _ABOUT_HIM = re.compile(r"\b(?:he|him|his|she|her)\b", re.I)
+
+    @classmethod
+    def _speak_to_him(cls, answer: str, user_text: str) -> str:
+        """Stop her describing him in the third person while talking to him.
+
+        He said "True." and she answered "That sounds like he's agreeing with
+        something" — narrating him to his face. The migration that fixes this
+        lives in the memory consolidator, where it keeps STORED facts in the
+        third person; nothing did the reverse for what she actually says.
+
+        Bounded deliberately: if he mentioned anyone else at all, a "he" is
+        probably about them and is left alone. Rewriting pronouns risks
+        mangling the grammar, so the offending sentence is dropped instead —
+        and only when what remains still says something.
+        """
+        text = (answer or "").strip()
+        if not text or not cls._ABOUT_HIM.search(text):
+            return answer
+        if cls._THIRD_PARTY.search(user_text or ""):
+            return answer  # he brought someone up; she may talk about them
+        kept = [
+            part for part in re.split(r"(?<=[.!?])\s+", text)
+            if part.strip() and not cls._ABOUT_HIM.search(part)
+        ]
+        remaining = " ".join(kept).strip()
+        if len(remaining) < 12:
+            return answer  # nothing substantial left; silence would be worse
+        LOG.info("Dropped a third-person aside about him: %r", text[:70])
+        return remaining
+
+    async def _curb_interview(self, answer: str) -> str:
+        """Stop her interviewing him, turn after turn.
+
+        `_curb_question_tic` existed for exactly this and was never called
+        from anywhere, so nothing ever ran it. Six consecutive replies in one
+        session each ended in a question — "What part are you focusing on?",
+        then "What kind of part are you focusing on?" — which is the
+        interrogation loop this was written to break.
+        """
+        text = (answer or "").strip()
+        if not text.endswith("?"):
+            return answer
+        try:
+            recent = await self.brain.recent_turns(limit=2, max_age_seconds=1800)
+        except Exception:
+            return answer
+        for turn in recent or []:
+            previous = str(turn.get("kendra_text") or "")
+            if previous.strip() and previous.strip() != text:
+                return self._curb_question_tic(text, previous)
+        return answer
 
     @classmethod
     def _curb_question_tic(cls, answer: str, previous_reply: str | None) -> str:
@@ -2108,6 +2426,9 @@ remembered, researched, or did something unless the context supports it.
             await self._build_plan_note(user_text)
             if self._BUILD_QUESTION.search(user_text) else []
         )
+        # The one question she must never get wrong, answered from fact.
+        if self._SELF_QUESTION.search(user_text):
+            build_note = self._self_note() + build_note
         memory = await self.brain.context(
             user_text,
             limit=int(self.settings.get("brain.live_retrieval_limit", 3)),
@@ -2122,7 +2443,9 @@ remembered, researched, or did something unless the context supports it.
                     {"role": "system", "content": self._conversation_prompt()},
                     *self._style_exemplars(),
                     *await self._history_messages(user_text),
-                    *self._memory_message(memory),
+                    *self._resident_note(memory),
+                    *self._resident_note(memory),
+                *self._memory_message(memory),
                     *build_note,
                     *self._sky_note(user_text),
                     *self._content_note(content_task),
@@ -2143,6 +2466,7 @@ remembered, researched, or did something unless the context supports it.
                     "content": "You already gave your previous answer. Say something genuinely NEW that answers the current message; do not restate any earlier reply.",
                 },
                 *await self._history_messages(user_text),
+                *self._resident_note(memory),
                 *self._memory_message(memory),
                 *self._sky_note(user_text),
                 *self._content_note(content_task),
@@ -2302,7 +2626,7 @@ remembered, researched, or did something unless the context supports it.
             tool_schemas = [s for s in registry.schemas() if str(s.get("name")) == "research"]
             allowed_tools = {"research"}
         if "observe" in allowed_tools:
-            if self._WHO_QUESTION.search(user_text):
+            if self._asks_who_she_sees(user_text):
                 fast = await self._fast_who_answer(user_text)
                 if fast is not None:
                     reply, launch_meet = fast
@@ -2494,7 +2818,7 @@ remembered, researched, or did something unless the context supports it.
                     source=source,
                     autonomous=autonomous,
                 )
-            if self._WHO_QUESTION.search(user_text):
+            if self._asks_who_she_sees(user_text):
                 names = observation.get("recognized_people_names") or []
                 people = int(observation.get("people_in_view") or 0)
                 if names:
@@ -2523,7 +2847,9 @@ remembered, researched, or did something unless the context supports it.
                         {"role": "system", "content": self._conversation_prompt()},
                         *self._style_exemplars(),
                         *await self._history_messages(user_text),
-                        *self._memory_message(memory),
+                        *self._resident_note(memory),
+                    *self._resident_note(memory),
+                *self._memory_message(memory),
                         *self._scene_note(observation),
                         {"role": "user", "content": user_text},
                     ],
@@ -2752,6 +3078,10 @@ remembered, researched, or did something unless the context supports it.
         build_note = (
             await self._build_plan_note(user_text) if self._BUILD_QUESTION.search(user_text) else []
         )
+        if self._SELF_QUESTION.search(user_text):
+            build_note = self._self_note() + build_note
+        # A cached reply must never answer "who are you" -- that is precisely
+        # the answer worth getting right every time.
         cached_answer = None if build_note else await self._cached_answer(user_text)
         if cached_answer:
             timings = getattr(self, "_turn_timings", None)
@@ -2804,6 +3134,7 @@ remembered, researched, or did something unless the context supports it.
                 {"role": "system", "content": self._conversation_prompt()},
                 *self._style_exemplars(),
                 *await self._history_messages(user_text),
+                *self._resident_note(memory),
                 *self._memory_message(memory),
                 *build_note,
                 *self._sky_note(user_text),
@@ -2875,6 +3206,9 @@ remembered, researched, or did something unless the context supports it.
                 if fresh_text != final_text:
                     await on_delta(" " + fresh_text, "warm")
                     final_text = fresh_text
+            # Two questions in a row turns a conversation into an interview.
+            final_text = await self._curb_interview(final_text)
+            final_text = self._speak_to_him(final_text, user_text)
             result = await self._remember_plain_turn(
                 session_id,
                 user_text,
@@ -2898,7 +3232,7 @@ remembered, researched, or did something unless the context supports it.
             # asked her to do something, and silence until the answer reads
             # as ignoring him (his words). Also free perceived latency —
             # she speaks while her eyes work.
-            if self._WHO_QUESTION.search(user_text):
+            if self._asks_who_she_sees(user_text):
                 fast = await self._fast_who_answer(user_text)
                 if fast is not None:
                     reply, launch_meet = fast
@@ -2938,7 +3272,7 @@ remembered, researched, or did something unless the context supports it.
                 return await self._remember_plain_turn(
                     session_id, user_text, final_text, source=source, streamed=True
                 )
-            if self._WHO_QUESTION.search(user_text):
+            if self._asks_who_she_sees(user_text):
                 # Identity questions are answered by her face recognizer,
                 # deterministically — and an unfamiliar face launches the
                 # meet ritual the moment this reply finishes.
@@ -3158,6 +3492,7 @@ remembered, researched, or did something unless the context supports it.
                 {"role": "system", "content": self._conversation_prompt()},
                 *self._style_exemplars(),
                 *await self._history_messages(user_text),
+                *self._resident_note(memory),
                 *self._memory_message(memory),
                 *self._scene_note(observation),
                 {"role": "user", "content": user_text},

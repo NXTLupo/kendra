@@ -14,6 +14,8 @@ from ..agent.service import AgentClient
 from ..brain.service import BrainClient
 from ..brain.sync import BrainSyncClient
 from ..config import Settings
+from ..facebus import FaceBusServer
+from ..facebus import socket_path as face_socket_path
 from ..ipc import UnixJsonClient
 from ..updates.git import GitUpdateInspector
 from ..updates.installer import SignedReleaseStager
@@ -217,6 +219,22 @@ async def _serve(settings: Settings) -> None:
             sys.stdout.write(json.dumps(value, ensure_ascii=False, default=str) + "\n")
             sys.stdout.flush()
 
+    # Her services push state here the instant it changes, and it goes straight
+    # out to the renderer. This is the only path by which anything drawing
+    # Kendra can learn something it did not ask for; without it her face can
+    # only poll a transcript of what she already finished saying.
+    async def forward(payload: dict[str, Any]) -> None:
+        await emit({"event": payload.get("event"), "at": payload.get("at"), "data": payload.get("data") or {}})
+
+    face_bus = FaceBusServer(face_socket_path(settings), forward)
+    try:
+        await face_bus.start()
+        LOG.info("Face event bus listening on %s", face_bus.path)
+    except Exception:
+        # A face that cannot be driven live is a degraded picture, not a
+        # broken Kendra. She must still answer.
+        LOG.warning("Face event bus unavailable; her face will fall back to polling", exc_info=True)
+
     async def handle(line: str) -> None:
         request_id: Any = None
         try:
@@ -242,6 +260,7 @@ async def _serve(settings: Settings) -> None:
                 tasks.add(task)
                 task.add_done_callback(tasks.discard)
     finally:
+        await face_bus.close()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
