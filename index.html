@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>Kendra</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600;8..60,700&display=swap">
+<style>
+/* Layout: Kendra's own dashboard palette (paper, ink, sage, apricot, rose). Each section is one drawn mechanism of the robot, read top to bottom like a field notebook. */
+:root {
+  --paper: #F5F1EA;
+  --paper-deep: #EBE4DA;
+  --card: #FBF8F3;
+  --ink: #262825;
+  --muted: #6D6F66;
+  --line: #CFC6B8;
+  --sage: #8FA99C;
+  --sage-deep: #526D61;
+  --apricot: #E6BD91;
+  --rose: #D6A8A0;
+  --rose-deep: #9E5A4E;
+  --lavender: #B8ADC9;
+  --display: "Source Serif 4", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --body: "Figtree", "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #191A18; --paper-deep: #22241F; --card: #1F211D; --ink: #ECE6DC; --muted: #A5A397; --line: #3A3C35;
+  --sage-deep: #9FBCAF; --rose-deep: #E0A497; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --paper: #191A18; --paper-deep: #22241F; --card: #1F211D; --ink: #ECE6DC; --muted: #A5A397; --line: #3A3C35;
+  --sage-deep: #9FBCAF; --rose-deep: #E0A497; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 400 16px/1.6 var(--body); }
+.wrap { max-width: 1200px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+section { padding-block: 60px; border-top: 1px solid var(--line); }
+h1, h2 { font-family: var(--display); font-weight: 600; margin: 0; text-wrap: balance; letter-spacing: -.005em; }
+h2 { font-size: clamp(28px, 3.4vw, 40px); line-height: 1.1; max-width: 26ch; }
+p { margin: 0; }
+.kicker { font: 500 12px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--sage-deep); }
+.intro { display: grid; gap: 12px; }
+.intro p { color: var(--muted); max-width: 66ch; }
+code { font-family: var(--mono); font-size: .86em; }
+
+/* Hero */
+.hero .wrap { padding-block: 52px 44px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 44px; align-items: center; }
+.hero h1 { font-size: clamp(56px, 8vw, 104px); line-height: .9; }
+.hero .tag { font: italic 500 22px/1.3 var(--display); color: var(--sage-deep); margin-top: 10px; }
+.hero .lead { margin-top: 18px; font-size: 18px; max-width: 50ch; }
+.facts { margin-top: 24px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 22px; }
+.fact { border-top: 1px solid var(--line); padding-top: 8px; }
+.fact span { display: block; font: 500 11px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.fact b { font-weight: 600; font-size: 15px; }
+.art { margin: 0; }
+.art img { width: 100%; height: auto; display: block; border-radius: 6px; }
+.art figcaption { font-size: 13px; color: var(--muted); margin-top: 8px; }
+@media (max-width: 880px) { .hero .wrap { grid-template-columns: 1fr; } }
+
+/* Diagrams */
+figure.diagram { margin: 30px 0 0; }
+.scroll { overflow-x: auto; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 20px; }
+.scroll svg { display: block; width: 100%; min-width: 960px; height: auto; }
+figure.diagram figcaption { color: var(--muted); font-size: 14px; margin-top: 12px; max-width: 80ch; }
+.d text { font-family: var(--body); font-size: 13px; fill: var(--ink); }
+.d .t { font-family: var(--display); font-size: 18px; font-weight: 600; }
+.d .k { font-family: var(--mono); font-size: 10.5px; fill: var(--sage-deep); letter-spacing: .05em; }
+.d .m { fill: var(--muted); font-size: 12.5px; }
+.d .lab { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+.d .box { fill: var(--card); stroke: var(--ink); stroke-width: 1.2; }
+.d .hot { fill: var(--card); stroke: var(--sage-deep); stroke-width: 2.4; }
+.d .warm { fill: var(--card); stroke: var(--apricot); stroke-width: 2.4; }
+.d .stop { fill: var(--card); stroke: var(--rose-deep); stroke-width: 2; }
+.d .pill { fill: var(--paper-deep); stroke: var(--line); }
+.d .zone { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 6 5; }
+.d .band { fill: var(--paper-deep); stroke: var(--line); }
+.d .edge { stroke: var(--ink); stroke-width: 1.4; fill: none; }
+.d .dash { stroke-dasharray: 5 4; }
+.d .ah { fill: var(--ink); }
+.d .wall { stroke: var(--rose-deep); stroke-width: 4; }
+
+.notes { margin-top: 26px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+.note b { font: 600 18px/1.2 var(--display); display: block; margin-bottom: 6px; }
+.note p { font-size: 15px; color: var(--muted); }
+@media (max-width: 860px) { .notes { grid-template-columns: 1fr; } }
+
+.starts { margin-top: 26px; display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 16px; }
+.start { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--card); }
+.start header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.start header b { font: 600 19px/1.1 var(--display); }
+.start header span { font: 500 12px/1 var(--mono); color: var(--sage-deep); }
+pre { margin: 0; padding: 16px; background: #262825; color: #ECE6DC; font: 400 12.5px/1.7 var(--mono); overflow-x: auto; }
+pre .c { color: #9FA394; }
+footer { padding-block: 26px 44px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--line); }
+</style>
+
+<header class="hero" id="hero">
+  <div class="wrap">
+    <div>
+      <span class="kicker">Offline-first robot companion</span>
+      <h1>Kendra</h1>
+      <p class="tag">The Sovereign AI Arachnid</p>
+      <p class="lead">Kendra is a six-legged robot companion who listens, talks, remembers people and moves, using models that run on her own computer. Virtual Kendra runs on an Intel iMac with a Webots twin today. The Raspberry Pi 5 robot stays locked until five hardware gates are verified on the real machine.</p>
+      <div class="facts">
+        <div class="fact"><span>Wake word</span><b>"Kendra", heard by Vosk</b></div>
+        <div class="fact"><span>Language model</span><b>Qwen3-1.7B on llama.cpp</b></div>
+        <div class="fact"><span>Speech</span><b>Parakeet in, Kokoro out</b></div>
+        <div class="fact"><span>Memory</span><b>SQLite with FTS5</b></div>
+      </div>
+    </div>
+    <figure class="art">
+      <img src="og.jpg" alt="Concept artwork of Kendra, a small six-legged robot with glowing eyes">
+      <figcaption>Concept artwork from the desktop app. The physical body is the Adeept RaspClaws-Metal hexapod kit.</figcaption>
+    </figure>
+  </div>
+</header>
+
+<main>
+<section id="voice">
+  <div class="wrap">
+    <div class="intro">
+      <span class="kicker">Voice</span>
+      <h2>What happens when someone says "Kendra"</h2>
+      <p>Every step runs on the machine Kendra lives on. The services pass newline-delimited JSON over Unix sockets, and a movement command skips the language model entirely.</p>
+    </div>
+    <figure class="diagram">
+      <div class="scroll">
+        <svg class="d" viewBox="0 0 1200 440" role="img" aria-label="Microphone audio goes to the Vosk wake word, then capture and voice activity detection, then speech to text. Movement words go straight to the movement parser and the body service. Other speech goes to the planner, which asks Qwen3 through llama.cpp, checks the chosen tool against a whitelist, and calls the services. The streamed reply is cut into phrases and spoken by Kokoro or Piper.">
+          <defs><marker id="k1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+          <rect class="pill" x="10" y="40" width="96" height="90" rx="45"/>
+          <text class="t" x="58" y="91" text-anchor="middle" style="font-size:16px">Mic</text>
+          <rect class="box" x="156" y="40" width="160" height="90" rx="4"/>
+          <text class="k" x="170" y="62">VOICE/WAKE.PY</text><text class="t" x="170" y="86">Wake word</text><text class="m" x="170" y="108">Vosk, fixed grammar</text>
+          <rect class="box" x="366" y="40" width="160" height="90" rx="4"/>
+          <text class="k" x="380" y="62">VOICE/VAD.PY</text><text class="t" x="380" y="86">Capture + VAD</text><text class="m" x="380" y="108">threshold from room noise</text>
+          <rect class="box" x="576" y="40" width="190" height="90" rx="4"/>
+          <text class="k" x="590" y="62">VOICE/ASR.PY</text><text class="t" x="590" y="86">Speech to text</text><text class="m" x="590" y="108">Parakeet, whisper.cpp backup</text>
+          <polygon class="box" points="850,43 892,85 850,127 808,85"/>
+          <text class="lab" x="850" y="82" text-anchor="middle">movement</text><text class="lab" x="850" y="95" text-anchor="middle">words?</text>
+          <rect class="warm" x="950" y="40" width="230" height="90" rx="4"/>
+          <text class="k" x="964" y="62">AGENT/MOVEMENT.PY</text><text class="t" x="964" y="86">Movement parser</text><text class="m" x="964" y="108">"back up", "stop": no model call</text>
+
+          <line class="edge" x1="106" y1="85" x2="152" y2="85" marker-end="url(#k1)"/><text class="lab" x="131" y="68" text-anchor="middle">16 kHz</text><text class="lab" x="131" y="78" text-anchor="middle">audio</text>
+          <line class="edge" x1="316" y1="85" x2="362" y2="85" marker-end="url(#k1)"/><text class="lab" x="341" y="68" text-anchor="middle">wake</text><text class="lab" x="341" y="78" text-anchor="middle">event</text>
+          <line class="edge" x1="526" y1="85" x2="572" y2="85" marker-end="url(#k1)"/><text class="lab" x="551" y="68" text-anchor="middle">speech</text><text class="lab" x="551" y="78" text-anchor="middle">clip</text>
+          <line class="edge" x1="766" y1="85" x2="804" y2="85" marker-end="url(#k1)"/><text class="lab" x="785" y="76" text-anchor="middle">text</text>
+          <line class="edge" x1="892" y1="85" x2="946" y2="85" marker-end="url(#k1)"/><text class="lab" x="919" y="76" text-anchor="middle">yes</text>
+
+          <line class="edge" x1="850" y1="127" x2="850" y2="206" marker-end="url(#k1)"/><text class="lab" x="858" y="172">no</text>
+          <rect class="hot" x="760" y="210" width="180" height="90" rx="4"/>
+          <text class="k" x="774" y="232">AGENT/PLANNER.PY</text><text class="t" x="774" y="256">Planner</text><text class="m" x="774" y="278">adds recalled memories</text>
+          <rect class="box" x="480" y="210" width="200" height="90" rx="4"/>
+          <text class="k" x="494" y="232">LLAMA.CPP · :17800</text><text class="t" x="494" y="256">Qwen3-1.7B</text><text class="m" x="494" y="278">returns a typed action</text>
+          <line class="edge" x1="760" y1="236" x2="684" y2="236" marker-end="url(#k1)"/><text class="lab" x="722" y="228" text-anchor="middle">prompt</text>
+          <line class="edge" x1="680" y1="272" x2="756" y2="272" marker-end="url(#k1)"/><text class="lab" x="718" y="290" text-anchor="middle">action JSON</text>
+          <rect class="box" x="980" y="210" width="170" height="90" rx="4"/>
+          <text class="k" x="994" y="232">AGENT/TOOLS.PY</text><text class="t" x="994" y="256">Tool whitelist</text><text class="m" x="994" y="278">pydantic range checks</text>
+          <line class="edge" x1="940" y1="255" x2="976" y2="255" marker-end="url(#k1)"/><text class="lab" x="958" y="246" text-anchor="middle">call</text>
+
+          <rect class="box" x="980" y="345" width="210" height="80" rx="4"/>
+          <text class="k" x="994" y="367">SERVICES</text><text class="t" x="994" y="391">brain, vision, body</text><text class="m" x="994" y="411">research, LEDs, delivery</text>
+          <line class="edge" x1="1065" y1="300" x2="1065" y2="341" marker-end="url(#k1)"/><text class="lab" x="1073" y="326">validated</text>
+          <polyline class="edge" points="980,385 870,385 870,304" marker-end="url(#k1)"/><text class="lab" x="925" y="377" text-anchor="middle">result</text>
+          <line class="edge" x1="1170" y1="130" x2="1170" y2="341" marker-end="url(#k1)"/><text class="lab" x="1162" y="180" text-anchor="end">MovementIntent</text>
+
+          <rect class="box" x="480" y="345" width="200" height="80" rx="4"/>
+          <text class="k" x="494" y="367">VOICE/STREAMING.PY</text><text class="t" x="494" y="391">Phrase chunker</text><text class="m" x="494" y="411">speaks before the reply ends</text>
+          <line class="edge" x1="580" y1="300" x2="580" y2="341" marker-end="url(#k1)"/><text class="lab" x="588" y="326">streamed text</text>
+          <rect class="box" x="240" y="345" width="190" height="80" rx="4"/>
+          <text class="k" x="254" y="367">VOICE/TTS.PY</text><text class="t" x="254" y="391">Kokoro or Piper</text><text class="m" x="254" y="411">seven affect profiles</text>
+          <line class="edge" x1="480" y1="385" x2="434" y2="385" marker-end="url(#k1)"/><text class="lab" x="457" y="365" text-anchor="middle">phrase,</text><text class="lab" x="457" y="377" text-anchor="middle">affect</text>
+          <rect class="pill" x="40" y="345" width="150" height="80" rx="40"/>
+          <text class="t" x="115" y="391" text-anchor="middle" style="font-size:16px">Speaker</text>
+          <line class="edge" x1="240" y1="385" x2="194" y2="385" marker-end="url(#k1)"/><text class="lab" x="217" y="365" text-anchor="middle">PCM</text><text class="lab" x="217" y="377" text-anchor="middle">audio</text>
+        </svg>
+      </div>
+      <figcaption>The orange path is why "stop" works instantly: the movement parser turns it into a typed intent without waiting for a model token. After a reply, the microphone stays open for a follow-up, so one "Kendra" can carry a whole conversation.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <div class="intro">
+      <span class="kicker">Safety</span>
+      <h2>Why the legs stop when the heartbeat does</h2>
+      <p>Kendra treats the language model's output as untrusted input. Five layers sit between the model and the motors, and each lower layer can stop the one above it.</p>
+    </div>
+    <figure class="diagram">
+      <div class="scroll">
+        <svg class="d" viewBox="0 0 1200 510" role="img" aria-label="Five stacked layers: the LLM planner, the tool registry, the body service, the reflex process and the physical layer. The body service sends each move to a check: is the reflex heartbeat present, under 0.75 seconds old, healthy and is the direction clear? If yes the clamped command reaches the driver; if not the move is refused. The physical layer can cut actuator power directly.">
+          <defs><marker id="k2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+          <rect class="band" x="10" y="20" width="630" height="70" rx="4"/>
+          <text class="k" x="26" y="44">LAYER 5</text><text class="t" x="26" y="70">LLM planner</text><text class="m" x="250" y="62">Qwen3 through llama.cpp.</text><text class="m" x="250" y="78">Its output is treated as untrusted input.</text>
+          <rect class="band" x="10" y="120" width="630" height="70" rx="4"/>
+          <text class="k" x="26" y="144">LAYER 4</text><text class="t" x="26" y="170">Tool registry</text><text class="m" x="250" y="162">Whitelisted tools with pydantic range checks.</text><text class="m" x="250" y="178">No shell, file path, URL or raw servo tool.</text>
+          <rect class="band" x="10" y="220" width="630" height="70" rx="4" style="stroke:var(--sage-deep);stroke-width:2"/>
+          <text class="k" x="26" y="244">LAYER 3</text><text class="t" x="26" y="270">Body service</text><text class="m" x="250" y="262">Clamps steps, turn angle and speed.</text><text class="m" x="250" y="278">A move that times out calls stop().</text>
+          <rect class="band" x="10" y="320" width="630" height="70" rx="4" style="stroke:var(--apricot);stroke-width:2"/>
+          <text class="k" x="26" y="344">LAYER 2</text><text class="t" x="26" y="370">Reflex process</text><text class="m" x="250" y="362">A separate process. Hard stop at 18 cm in front;</text><text class="m" x="250" y="378">battery, duty-cycle and rest limits.</text>
+          <rect class="band" x="10" y="420" width="630" height="70" rx="4"/>
+          <text class="k" x="26" y="444">LAYER 1</text><text class="t" x="26" y="470">Physical</text><text class="m" x="250" y="462">Hardwired e-stop, fuse and battery protection.</text><text class="m" x="250" y="478">Works without Python or Linux.</text>
+
+          <line class="edge" x1="140" y1="90" x2="140" y2="116" marker-end="url(#k2)"/><text class="lab" x="148" y="108">action JSON</text>
+          <line class="edge" x1="140" y1="190" x2="140" y2="216" marker-end="url(#k2)"/><text class="lab" x="148" y="208">walk / turn / pose call</text>
+          <line class="edge" x1="560" y1="320" x2="560" y2="294" marker-end="url(#k2)"/><text class="lab" x="552" y="312" text-anchor="end">heartbeat, blocked directions</text>
+          <line class="edge dash" x1="600" y1="290" x2="600" y2="316" marker-end="url(#k2)"/><text class="lab" x="608" y="308">move times</text>
+
+          <rect class="box" x="690" y="330" width="240" height="60" rx="4"/>
+          <text class="k" x="704" y="352">SENSORS</text><text class="m" x="704" y="372">4 cliff sensors, front range, battery</text>
+          <line class="edge" x1="690" y1="360" x2="644" y2="360" marker-end="url(#k2)"/><text class="lab" x="667" y="404" text-anchor="middle">every 40 ms</text>
+
+          <line class="edge" x1="640" y1="255" x2="706" y2="255" marker-end="url(#k2)"/><text class="lab" x="673" y="236" text-anchor="middle">move</text><text class="lab" x="673" y="246" text-anchor="middle">request</text>
+          <polygon class="box" points="760,200 815,255 760,310 705,255"/>
+          <text class="lab" x="760" y="246" text-anchor="middle">heartbeat</text><text class="lab" x="760" y="259" text-anchor="middle">under 0.75 s,</text><text class="lab" x="760" y="272" text-anchor="middle">path clear?</text>
+          <line class="edge" x1="760" y1="200" x2="760" y2="176" marker-end="url(#k2)"/><text class="lab" x="768" y="192">no</text>
+          <rect class="stop" x="690" y="110" width="190" height="62" rx="4"/>
+          <text class="t" x="704" y="136" style="fill:var(--rose-deep)">Move refused</text><text class="m" x="704" y="158">error goes back to the agent</text>
+          <line class="edge" x1="815" y1="255" x2="876" y2="255" marker-end="url(#k2)"/><text class="lab" x="845" y="246" text-anchor="middle">yes</text>
+          <rect class="hot" x="880" y="215" width="300" height="80" rx="4"/>
+          <text class="k" x="894" y="237">CLAMPED COMMAND</text><text class="t" x="894" y="261">Driver</text><text class="m" x="894" y="281">simulation, webots or raspclaws</text>
+
+          <rect class="box" x="930" y="40" width="250" height="70" rx="4"/>
+          <text class="k" x="944" y="62">HARDWARE MODE ONLY</text><text class="t" x="944" y="86">Five hardware gates</text><text class="m" x="944" y="102">servos, battery, e-stop, cliffs, motion</text>
+          <line class="edge dash" x1="1055" y1="110" x2="1055" y2="211" marker-end="url(#k2)"/><text class="lab" x="1047" y="156" text-anchor="end">all five true, or the</text><text class="lab" x="1047" y="168" text-anchor="end">robot driver won't start</text>
+          <polyline class="edge dash" points="640,455 1030,455 1030,299" marker-end="url(#k2)"/><text class="lab" x="835" y="447" text-anchor="middle">cuts actuator power</text>
+        </svg>
+      </div>
+      <figcaption>Killing the agent leaves the reflex and body services running. Killing the reflex process lets its heartbeat go stale, and the body service refuses the next move.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="memory">
+  <div class="wrap">
+    <div class="intro">
+      <span class="kicker">Memory and identity</span>
+      <h2>Where memories and faces are stored</h2>
+      <p>What Kendra knows and who she recognizes live in two separate SQLite files. Face vectors stay in the identity store; Kendra Brain only ever sees an opaque person id.</p>
+    </div>
+    <figure class="diagram">
+      <div class="scroll">
+        <svg class="d" viewBox="0 0 1200 380" role="img" aria-label="Left, Kendra Brain: a recall query is ranked over FTS5 hits and embedding vectors and the top memories go to the planner. Right, the identity store: camera frames are detected and embedded, then matched against enrolled face vectors. Only an opaque person id crosses the wall into Kendra Brain.">
+          <defs><marker id="k3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker></defs>
+          <text class="k" x="20" y="22">KENDRA-BRAIN.DB</text>
+          <rect class="pill" x="20" y="60" width="140" height="56" rx="28"/><text x="90" y="93" text-anchor="middle">Recall query</text>
+          <rect class="hot" x="210" y="50" width="180" height="76" rx="4"/>
+          <text class="t" x="224" y="78">Hybrid ranking</text><text class="m" x="224" y="98">FTS5 + vectors</text><text class="m" x="224" y="114">+ salience, confidence</text>
+          <line class="edge" x1="160" y1="88" x2="206" y2="88" marker-end="url(#k3)"/>
+          <rect class="pill" x="440" y="60" width="130" height="56" rx="28"/><text x="505" y="86" text-anchor="middle">Planner</text><text class="m" x="505" y="102" text-anchor="middle">context</text>
+          <line class="edge" x1="390" y1="88" x2="436" y2="88" marker-end="url(#k3)"/><text class="lab" x="413" y="80" text-anchor="middle">top</text>
+          <rect class="box" x="20" y="170" width="230" height="70" rx="4"/>
+          <text class="t" x="34" y="196">Memories</text><text class="m" x="34" y="216">FTS5 index, provenance,</text><text class="m" x="34" y="230">superseded by corrections</text>
+          <rect class="box" x="290" y="170" width="280" height="70" rx="4"/>
+          <text class="t" x="304" y="196">Embedding vectors</text><text class="m" x="304" y="216">Qwen3-Embedding ONNX,</text><text class="m" x="304" y="230">MiniLM, or hashing</text>
+          <polyline class="edge" points="135,170 135,150 260,150 260,130" marker-end="url(#k3)"/><text class="lab" x="198" y="144" text-anchor="middle">FTS5 hits</text>
+          <polyline class="edge" points="430,170 430,150 340,150 340,130" marker-end="url(#k3)"/><text class="lab" x="385" y="144" text-anchor="middle">scores</text>
+          <rect class="box" x="20" y="275" width="550" height="56" rx="4"/>
+          <text class="t" x="34" y="300">People, places, interests, goals</text><text class="m" x="34" y="320">keyed by an opaque person_uid</text>
+
+          <line class="wall" x1="605" y1="30" x2="605" y2="368"/>
+          <text class="lab" x="595" y="22" text-anchor="end" style="fill:var(--rose-deep)">separate files</text>
+
+          <text class="k" x="640" y="22">KENDRA-IDENTITIES.DB</text>
+          <rect class="pill" x="640" y="60" width="140" height="56" rx="28"/><text x="710" y="93" text-anchor="middle">Camera frame</text>
+          <rect class="box" x="830" y="50" width="200" height="76" rx="4"/>
+          <text class="t" x="844" y="78">YuNet + SFace</text><text class="m" x="844" y="98">find faces,</text><text class="m" x="844" y="114">embed each one</text>
+          <line class="edge" x1="780" y1="88" x2="826" y2="88" marker-end="url(#k3)"/>
+          <polygon class="box" points="1115,48 1155,88 1115,128 1075,88"/>
+          <text class="lab" x="1115" y="85" text-anchor="middle">match?</text>
+          <line class="edge" x1="1030" y1="88" x2="1071" y2="88" marker-end="url(#k3)"/><text class="lab" x="1052" y="80" text-anchor="middle">vector</text>
+          <text class="lab" x="1115" y="40" text-anchor="middle">no match: stays unknown</text>
+          <rect class="box" x="640" y="170" width="160" height="70" rx="4"/>
+          <text class="t" x="654" y="196">Identities</text><text class="m" x="654" y="216">consent status</text>
+          <rect class="warm" x="840" y="170" width="200" height="70" rx="4"/>
+          <text class="t" x="854" y="196">Face vectors</text><text class="m" x="854" y="216">SFace embeddings</text>
+          <polyline class="edge" points="1040,205 1115,205 1115,132" marker-end="url(#k3)"/><text class="lab" x="1123" y="170">enrolled</text>
+          <rect class="pill" x="640" y="280" width="400" height="50" rx="25"/>
+          <text x="840" y="310" text-anchor="middle">vision enroll --consent</text>
+          <line class="edge" x1="720" y1="280" x2="720" y2="244" marker-end="url(#k3)"/><text class="lab" x="728" y="266">name, consent</text>
+          <line class="edge" x1="940" y1="280" x2="940" y2="244" marker-end="url(#k3)"/><text class="lab" x="948" y="266">face vectors</text>
+          <polyline class="edge" points="1155,88 1182,88 1182,352 300,352 300,335" marker-end="url(#k3)"/>
+          <text class="lab" x="760" y="346" text-anchor="middle">opaque person_uid only</text>
+        </svg>
+      </div>
+      <figcaption>The red line is the boundary between the two databases. Every memory also carries a provenance label (observed, user_stated, researched, inferred, system) and a confidence score, and the planner receives both.</figcaption>
+    </figure>
+    <div class="notes">
+      <div class="note"><b>Corrections keep history</b><p>A correction writes a new memory and marks the old one superseded, so the earlier version stays in the database.</p></div>
+      <div class="note"><b>No surprise downloads</b><p>The ONNX embedders load only from local files. The hashing embedder needs no download, which is why the PC profile works on a fresh clone.</p></div>
+      <div class="note"><b>Consent is checked in code</b><p>The identity store raises a permission error when an enrollment arrives without the consent flag.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <div class="intro">
+      <span class="kicker">Run it</span>
+      <h2>Try Kendra Brain on any computer, or run the full stack on an iMac</h2>
+      <p>The first path needs Python 3.11 and nothing else. Voice, the webcam, Webots and the local models need a real desktop; the scripts target an Intel iMac.</p>
+    </div>
+    <div class="starts">
+      <div class="start"><header><b>Any computer</b><span>tests + memory</span></header>
+<pre>git clone https://github.com/NXTLupo/kendra.git && cd kendra
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]" && pytest -q
+<span class="c"># zero-download hashing embedder</span>
+python -m kendra --config config/pc.yaml init
+python -m kendra --config config/pc.yaml brain search "language model"</pre></div>
+      <div class="start"><header><b>Intel iMac</b><span>voice, vision, twin</span></header>
+<pre>./scripts/bootstrap_intel_macos.sh
+.venv/bin/python scripts/fetch_local_models.py --embeddings --kokoro
+./scripts/start_llm_intel_macos.sh   <span class="c"># Qwen3-1.7B on :17800</span>
+python -m kendra --config config/webots.yaml dev start --voice
+<span class="c"># then open the desktop app and say "Kendra"</span></pre></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer><div class="wrap">Kendra · github.com/NXTLupo/kendra</div></footer>
+
+</html>
